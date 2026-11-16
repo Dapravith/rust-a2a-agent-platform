@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/api",
+    "apps/worker-agent",
+    "apps/reviewer-agent",
+    "crates/contracts",
+    "crates/agent-runtime",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0"
+rust-version = "1.94"
+publish = false
+
+[workspace.dependencies]
+# Official A2A Rust SDK (github.com/a2aproject/a2a-rs). Pinned exactly: pre-1.0.
+a2a = { package = "a2a-lf", version = "=0.4.2" }
+a2a-server = { package = "a2a-server-lf", version = "=0.5.3" }
+a2a-client = { package = "a2a-client-lf", version = "=0.2.9" }
+
+# Must match the versions the SDK is built on (axum 0.8, reqwest 0.13).
+axum = { version = "0.8.9", features = ["macros"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "net", "time", "signal", "sync"] }
+futures = "0.3.34"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+uuid = { version = "1.29", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+url = "2.5.8"
+tower-http = { version = "0.7.1", features = ["fs", "trace", "request-id", "limit", "timeout", "set-header"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+
+contracts = { path = "crates/contracts" }
+agent-runtime = { path = "crates/agent-runtime" }
+worker-agent = { path = "apps/worker-agent" }
+reviewer-agent = { path = "apps/reviewer-agent" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"

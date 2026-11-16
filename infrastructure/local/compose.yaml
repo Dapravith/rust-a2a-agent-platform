@@ -1,0 +1,28 @@
+# Local development database only (P0). Not a deployment manifest.
+# Supabase is plain Postgres, so the API runs unchanged against either.
+#   docker compose -f infrastructure/local/compose.yaml up -d
+name: a2a-local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      # Local-only throwaway credential; override via the environment if desired.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: a2a
+    ports:
+      # Loopback only: the database is never exposed on the network.
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d a2a"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      # First boot runs initdb, which can take minutes on Docker Desktop.
+      start_period: 180s
+
+volumes:
+  pgdata:

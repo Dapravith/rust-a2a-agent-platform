@@ -1,0 +1,99 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base title="Submit" active="submit">
+  <h1>Ask the agents</h1>
+  <p class="lead">
+    The Worker agent drafts an answer; the Reviewer agent independently evaluates it. Both talk to the
+    orchestrator over A2A. One workflow runs at a time.
+  </p>
+
+  <form id="submit-form" class="card" novalidate>
+    <label for="question">Software engineering question</label>
+    <textarea
+      id="question"
+      name="question"
+      required
+      minlength="10"
+      maxlength="4000"
+      placeholder="Propose validation rules for a Rust API that creates crowdfunding campaigns."
+      aria-describedby="question-hint"></textarea>
+    <p id="question-hint" class="hint"><span id="count">0</span> / 4000 characters (minimum 10).</p>
+    <div class="form-row">
+      <span class="hint">Nothing is executed or changed; results are text only.</span>
+      <button id="submit-btn" type="submit">Run workflow</button>
+    </div>
+    <div id="form-status" aria-live="polite"></div>
+  </form>
+
+  <section class="card" aria-labelledby="agents-heading">
+    <h2 id="agents-heading">Agents (discovered via Agent Cards)</h2>
+    <div id="agents" class="agents"><p class="msg msg-info"><span class="spinner"></span> Discovering agents…</p></div>
+  </section>
+</Base>
+
+<script>
+  import { api, ApiError } from "../scripts/api";
+  import { badge, byId, h, message } from "../scripts/dom";
+
+  const form = byId<HTMLFormElement>("submit-form");
+  const textarea = byId<HTMLTextAreaElement>("question");
+  const button = byId<HTMLButtonElement>("submit-btn");
+  const status = byId("form-status");
+  const count = byId("count");
+
+  // One key per intended submission: double-clicks and retries of the same
+  // submission never create a second workflow.
+  let idempotencyKey = crypto.randomUUID();
+  textarea.addEventListener("input", () => {
+    count.textContent = String(textarea.value.length);
+    idempotencyKey = crypto.randomUUID();
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const question = textarea.value.trim();
+    status.replaceChildren();
+    if (question.length < 10) {
+      status.append(message("error", "Please enter at least 10 characters."));
+      textarea.focus();
+      return;
+    }
+    button.disabled = true;
+    status.append(h("p", { class: "msg msg-info" }, h("span", { class: "spinner" }), " Submitting…"));
+    try {
+      const wf = await api.create(question, idempotencyKey);
+      window.location.assign(`/workflow/?id=${encodeURIComponent(wf.id)}`);
+    } catch (e) {
+      status.replaceChildren(
+        message("error", e instanceof ApiError ? e.message : "Unexpected error while submitting."),
+      );
+      if (e instanceof ApiError && e.status === 409) {
+        status.append(h("p", { class: "hint" }, h("a", { href: "/history/" }, "View the running workflow in History")));
+      }
+      button.disabled = false;
+    }
+  });
+
+  async function loadAgents() {
+    const box = byId("agents");
+    try {
+      const { agents } = await api.agents();
+      box.replaceChildren(
+        ...agents.map((a) =>
+          h(
+            "div",
+            { class: "agent" },
+            h("div", { class: "header-row" }, h("span", { class: "agent-name" }, a.name), badge(a.reachable ? "reachable" : "unreachable")),
+            h("div", { class: "agent-meta" }, `${a.role}${a.version ? ` · v${a.version}` : ""}`),
+            h("p", { class: "agent-meta" }, a.reachable ? (a.description ?? "") : (a.error ?? "Unreachable")),
+          ),
+        ),
+      );
+    } catch (e) {
+      box.replaceChildren(message("error", e instanceof ApiError ? e.message : "Could not load agents."));
+    }
+  }
+  void loadAgents();
+</script>

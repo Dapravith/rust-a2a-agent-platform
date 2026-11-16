@@ -1,0 +1,36 @@
+[package]
+name = "api"
+description = "Axum API and deterministic orchestration of the Worker -> Reviewer A2A workflow"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+contracts = { workspace = true }
+a2a = { workspace = true }
+a2a-client = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+url = { workspace = true }
+tower-http = { workspace = true }
+sqlx = { workspace = true }
+
+[dev-dependencies]
+agent-runtime = { workspace = true }
+worker-agent = { workspace = true }
+reviewer-agent = { workspace = true }
+a2a-server = { workspace = true }
+futures = { workspace = true }
+
+[lints]
+workspace = true

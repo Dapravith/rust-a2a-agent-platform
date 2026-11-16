@@ -1,0 +1,17 @@
+[package]
+name = "contracts"
+description = "Shared A2A artifact contracts and validation for the Worker/Reviewer workflow"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+a2a = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

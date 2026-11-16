@@ -1,0 +1,26 @@
+[package]
+name = "agent-runtime"
+description = "Shared A2A server plumbing (official a2a-rs SDK) and the single LLM provider client used by the agents"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+contracts = { workspace = true }
+a2a = { workspace = true }
+a2a-server = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "reviewer-agent"
+description = "Reviewer A2A agent: independently reviews a draft and returns a verdict"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agent-runtime = { workspace = true }
+contracts = { workspace = true }
+a2a = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+a2a-client = { workspace = true }
+reqwest = { workspace = true }
+
+[lints]
+workspace = true
