@@ -77,10 +77,10 @@ Invalid agent input → task `rejected`; inference failure → task `failed` wit
 | Timeouts | One deadline per agent call (`AGENT_TIMEOUT_SECS`, default 240 s) covering send + polling; HTTP socket timeout sits 5 s above it. On the deadline the API sends `CancelTask`; the agent's executor aborts the in-flight work (the SDK alone only marks the task canceled). Agents bound LLM retries with `LLM_DEADLINE_SECS` (default 200 s, keep below `AGENT_TIMEOUT_SECS`) |
 | Error exposure | Errors stored on workflows/runs are client-visible, so they carry only a category (`internal error…`, `agent unreachable…`) with URLs redacted; full details go to the server logs |
 | Agent memory | Known limit: the SDK 0.5.3 `InMemoryTaskStore` keeps every task for the process lifetime (a bound exists only in unreleased SDK `main`). With one workflow at a time this is ~2 small tasks per workflow; restart agents periodically until the SDK release |
-| Agent trust | Agents come only from configured URLs; card name must match; only JSON-RPC interfaces on the configured origin are used; redirects disabled |
+| Agent trust | Agents come only from configured URLs (never from user input); card name must match; only JSON-RPC interfaces on the configured origin are used; redirects disabled. An unreachable agent (`agent unreachable`) is distinguished from one that answers with a missing or malformed card (`invalid agent card`) |
 | Untrusted LLM output | Structured JSON output, strict decode + validation on both agent and orchestrator; UI renders text only (`textContent`), strict CSP with no inline scripts |
 | Secrets | Env only, validated at startup; `DATABASE_URL` redacted in logs; API key never logged; nothing server-side in the static bundle (CI check) |
-| Input limits | 16 KB request body, question 10–4000 chars, control characters rejected |
+| Input limits | API: 16 KB request body, question 10–4000 chars, control characters rejected. Agents: 256 KiB per JSON-RPC request, enforced with `RequestBodyLimitLayer` (the SDK's `jsonrpc_router` sets its own 10 MiB `DefaultBodyLimit`, which would override an outer `DefaultBodyLimit`) |
 | SQL | Parameterized, and `&'static str` only (sqlx 0.9 `SqlSafeStr`) |
 | Consistent reads | Detail endpoint reads workflow + runs + artifacts in one `REPEATABLE READ` snapshot |
 | Logging | Structured (`LOG_FORMAT=json`), request id, workflow id, agent, outcome; question/draft content not logged |

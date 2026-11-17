@@ -12,6 +12,7 @@ contracts = { workspace = true }
 a2a = { workspace = true }
 a2a-server = { workspace = true }
 axum = { workspace = true }
+tower-http = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

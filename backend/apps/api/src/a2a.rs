@@ -24,6 +24,8 @@ const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum AgentError {
     #[error("agent unreachable: {0}")]
     Unreachable(String),
+    #[error("invalid agent card: {0}")]
+    InvalidCard(String),
     #[error("untrusted agent card: {0}")]
     UntrustedCard(String),
     #[error("A2A protocol error: {0}")]
@@ -167,7 +169,7 @@ impl A2AGateway {
             .resolver
             .resolve(endpoint.base_url.as_str())
             .await
-            .map_err(|e| AgentError::Unreachable(e.message.clone()))?;
+            .map_err(|e| classify_card_error(&e.message))?;
         trusted_card(card, endpoint)
     }
 
@@ -250,6 +252,19 @@ impl A2AGateway {
                 Err(AgentError::Timeout(self.timeout))
             }
         }
+    }
+}
+
+/// SDK 0.2.9 `AgentCardResolver` reports every failure as an internal error,
+/// distinguishable only by message: a transport failure means the agent is
+/// unreachable; a non-2xx status or an unparseable body means it answered
+/// with an invalid card. Covered by integration tests, so an SDK wording
+/// change shows up as a test failure, not a silent mislabel.
+fn classify_card_error(message: &str) -> AgentError {
+    if message.starts_with("failed to fetch agent card") {
+        AgentError::Unreachable(message.to_owned())
+    } else {
+        AgentError::InvalidCard(message.to_owned())
     }
 }
 

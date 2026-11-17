@@ -202,6 +202,10 @@ impl<S: Skill> AgentExecutor for SkillExecutor<S> {
     }
 }
 
+/// Largest JSON-RPC request an agent accepts. The biggest valid payload (a
+/// review request: 4k question + 20k draft + metadata) is well below this.
+pub const MAX_AGENT_BODY_BYTES: usize = 256 * 1024;
+
 /// The complete HTTP surface of one agent: JSON-RPC, Agent Card, health.
 pub fn router<S: Skill>(skill: S, public_url: &str) -> axum::Router {
     let card = Arc::new(StaticAgentCard::new(skill.card(public_url)));
@@ -213,7 +217,12 @@ pub fn router<S: Skill>(skill: S, public_url: &str) -> axum::Router {
         .nest("/jsonrpc", jsonrpc_router(handler))
         .merge(agent_card_router(card))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
-        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
+        // Not `DefaultBodyLimit`: the SDK's `jsonrpc_router` sets its own
+        // (10 MiB) and the innermost one wins. This layer limits the body
+        // stream itself, so it holds for every nested route.
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            MAX_AGENT_BODY_BYTES,
+        ))
 }
 
 /// Bind address and public URL, read from `<PREFIX>_BIND` / `<PREFIX>_PUBLIC_URL`.
