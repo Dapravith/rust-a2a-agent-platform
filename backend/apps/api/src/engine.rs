@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::a2a::{A2AGateway, AgentEndpoint};
 use crate::config::Config;
 use crate::db::{self, DbError, Workflow};
+use crate::error_code::ErrorCode;
 
 #[derive(Clone)]
 pub struct Engine {
@@ -29,12 +30,48 @@ pub struct Engine {
 /// details and is only written to the server logs.
 enum StepError {
     /// Already sanitized by [`crate::a2a::AgentError::safe_message`].
-    #[error("{0}")]
-    Agent(String),
+    #[error("{message}")]
+    Agent { code: ErrorCode, message: String },
     #[error("internal error: database operation failed")]
     Db(#[from] DbError),
     #[error("internal error")]
     Internal(String),
+}
+
+impl StepError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Agent { code, .. } => *code,
+            Self::Db(_) => ErrorCode::PersistenceFailed,
+            Self::Internal(_) => ErrorCode::InternalError,
+        }
+    }
+}
+
+/// A workflow failure and the stage (agent) it happened in, if any.
+#[derive(Debug)]
+struct WorkflowFailure {
+    stage: Option<&'static str>,
+    error: StepError,
+}
+
+impl From<StepError> for WorkflowFailure {
+    fn from(error: StepError) -> Self {
+        Self { stage: None, error }
+    }
+}
+
+impl From<DbError> for WorkflowFailure {
+    fn from(e: DbError) -> Self {
+        StepError::Db(e).into()
+    }
+}
+
+fn at(stage: &'static str) -> impl FnOnce(StepError) -> WorkflowFailure {
+    move |error| WorkflowFailure {
+        stage: Some(stage),
+        error,
+    }
 }
 
 impl Engine {
@@ -78,24 +115,34 @@ impl Engine {
             tokio::spawn(async move { inner.execute(id, question).await }.instrument(span.clone()));
         let outcome = match handle.await {
             Ok(r) => r,
-            Err(join) => Err(StepError::Internal(format!(
-                "workflow task aborted: {join}"
-            ))),
+            Err(join) => Err(StepError::Internal(format!("workflow task aborted: {join}")).into()),
         };
         let _guard = span.enter();
         match outcome {
             Ok(verdict) => tracing::info!(outcome = "completed", verdict, "workflow finished"),
-            Err(e) => {
-                let msg = e.to_string();
-                tracing::warn!(outcome = "failed", error = %msg, detail = ?e, "workflow failed");
-                if let Err(db_err) = db::fail_workflow(&self.pool, id, &msg).await {
-                    tracing::error!(error = %db_err, "could not record workflow failure");
+            Err(f) => {
+                let msg = f.error.to_string();
+                let code = f.error.code();
+                tracing::warn!(outcome = "failed", error_code = %code, stage = f.stage,
+                    error = %msg, detail = ?f.error, "workflow failed");
+                let failure = db::Failure {
+                    code,
+                    stage: f.stage,
+                    error: &msg,
+                };
+                match db::fail_workflow(&self.pool, id, failure).await {
+                    Ok(()) => {}
+                    // Already terminal: never overwrite a recorded outcome.
+                    Err(e @ DbError::InvalidTransition { .. }) => {
+                        tracing::warn!(error = %e, "workflow already terminal; failure not recorded")
+                    }
+                    Err(e) => tracing::error!(error = %e, "could not record workflow failure"),
                 }
             }
         }
     }
 
-    async fn execute(&self, id: Uuid, question: String) -> Result<&'static str, StepError> {
+    async fn execute(&self, id: Uuid, question: String) -> Result<&'static str, WorkflowFailure> {
         db::mark_running(&self.pool, id).await?;
 
         let draft: DraftArtifact = self
@@ -109,7 +156,8 @@ impl Engine {
                     question: question.clone(),
                 },
             )
-            .await?;
+            .await
+            .map_err(at("worker"))?;
 
         let review: ReviewArtifact = self
             .step(
@@ -120,7 +168,8 @@ impl Engine {
                 "review",
                 &ReviewerRequest { question, draft },
             )
-            .await?;
+            .await
+            .map_err(at("reviewer"))?;
 
         let verdict = match review.verdict {
             Verdict::Pass => "pass",
@@ -159,8 +208,9 @@ impl Engine {
             )
             .await;
         if let Err(e) = &result {
-            tracing::warn!(agent, outcome = "failed", error = %e, detail = ?e, "agent step failed");
-            if let Err(db_err) = db::fail_run(&self.pool, run_id, &e.to_string()).await {
+            tracing::warn!(agent, outcome = "failed", error_code = %e.code(), error = %e,
+                detail = ?e, "agent step failed");
+            if let Err(db_err) = db::fail_run(&self.pool, run_id, e.code(), &e.to_string()).await {
                 tracing::error!(agent, error = %db_err, "could not record agent run failure");
             }
         }
@@ -190,7 +240,10 @@ impl Engine {
             .await
             .map_err(|e| {
                 tracing::warn!(agent, detail = %e, "A2A call failed");
-                StepError::Agent(format!("{agent}: {}", e.safe_message()))
+                StepError::Agent {
+                    code: e.code(),
+                    message: format!("{agent}: {}", e.safe_message()),
+                }
             })?;
         let content =
             serde_json::to_value(&outcome.value).map_err(|e| StepError::Internal(e.to_string()))?;

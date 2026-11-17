@@ -26,6 +26,7 @@ tower-http = { workspace = true }
 sqlx = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["process"] }
 agent-runtime = { workspace = true }
 worker-agent = { workspace = true }
 reviewer-agent = { workspace = true }

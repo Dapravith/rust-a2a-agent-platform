@@ -47,6 +47,10 @@ impl From<DbError> for ApiError {
                 tracing::error!(error = %err, "database error");
                 ApiError::Unavailable
             }
+            e @ DbError::InvalidTransition { .. } => {
+                tracing::error!(error = %e, "unexpected state transition");
+                ApiError::Unavailable
+            }
         }
     }
 }

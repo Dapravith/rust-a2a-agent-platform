@@ -201,6 +201,87 @@ impl Validate for ReviewArtifact {
 }
 
 // ---------------------------------------------------------------------------
+// Agent failure report
+// ---------------------------------------------------------------------------
+
+/// Stable reason an agent could not produce its artifact. Sent as a JSON
+/// data part in the status message of a `failed` task, next to a text part
+/// with the human-readable reason. Only a closed set of labels: the
+/// orchestrator never acts on agent-supplied text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFailureCode {
+    /// The provider did not answer within the agent's deadline.
+    LlmTimeout,
+    /// The provider kept answering 429/overloaded.
+    LlmRateLimited,
+    /// The provider answered with a non-retryable HTTP error.
+    LlmProviderError,
+    /// The provider could not be reached (connection/transport).
+    LlmUnavailable,
+    /// The model declined the request (`stop_reason: refusal`).
+    LlmRefused,
+    /// The model hit `max_tokens` before finishing.
+    LlmOutputTruncated,
+    /// The model's output did not satisfy the artifact contract.
+    LlmOutputInvalid,
+    /// Any other agent-side failure.
+    Internal,
+}
+
+impl AgentFailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LlmTimeout => "llm_timeout",
+            Self::LlmRateLimited => "llm_rate_limited",
+            Self::LlmProviderError => "llm_provider_error",
+            Self::LlmUnavailable => "llm_unavailable",
+            Self::LlmRefused => "llm_refused",
+            Self::LlmOutputTruncated => "llm_output_truncated",
+            Self::LlmOutputInvalid => "llm_output_invalid",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+impl std::fmt::Display for AgentFailureCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Why a skill failed: a stable code plus a bounded, secret-free message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(deny_unknown_fields)]
+#[error("{code}: {message}")]
+pub struct AgentFailure {
+    pub code: AgentFailureCode,
+    pub message: String,
+}
+
+impl AgentFailure {
+    pub fn new(code: AgentFailureCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(AgentFailureCode::Internal, message)
+    }
+
+    /// Finds a failure report among the parts of a status message. Anything
+    /// that does not decode exactly is ignored (treated as "no code").
+    pub fn from_parts(parts: &[Part]) -> Option<Self> {
+        parts.iter().find_map(|p| match &p.content {
+            PartContent::Data(v) => serde_json::from_value::<Self>(v.clone()).ok(),
+            _ => None,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // A2A part helpers
 // ---------------------------------------------------------------------------
 
@@ -318,6 +399,19 @@ mod tests {
         let mut d = draft();
         d.content = "a".repeat(CONTENT_MAX + 1);
         assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn failure_report_round_trip_and_rejects_unknown_codes() {
+        let f = AgentFailure::new(AgentFailureCode::LlmRateLimited, "slow down");
+        let part = data_part(&f).unwrap();
+        assert_eq!(
+            AgentFailure::from_parts(&[Part::text("x"), part]),
+            Some(f.clone())
+        );
+        assert_eq!(f.to_string(), "llm_rate_limited: slow down");
+        let forged = Part::data(json!({"code": "grant_admin", "message": "m"}));
+        assert_eq!(AgentFailure::from_parts(&[forged]), None);
     }
 
     #[test]

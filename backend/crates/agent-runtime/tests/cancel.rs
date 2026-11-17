@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use a2a::{AgentCard, AgentSkill};
 use agent_runtime::Skill;
-use contracts::{DraftArtifact, WorkerRequest};
+use contracts::{AgentFailure, DraftArtifact, WorkerRequest};
 use serde_json::{Value, json};
 
 #[derive(Default)]
@@ -51,12 +51,12 @@ impl Skill for Sleeper {
         "mock"
     }
 
-    async fn run(&self, _input: WorkerRequest) -> Result<DraftArtifact, String> {
+    async fn run(&self, _input: WorkerRequest) -> Result<DraftArtifact, AgentFailure> {
         let _guard = DropGuard(self.0.clone());
         self.0.started.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(30)).await;
         self.0.finished.store(true, Ordering::SeqCst);
-        Err("unreachable in this test".into())
+        Err(AgentFailure::internal("unreachable in this test"))
     }
 }
 

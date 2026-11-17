@@ -8,7 +8,7 @@ An Astro dashboard submits questions and shows history and results.
 
 Source of truth: [`A2A_PRD.md`](A2A_PRD.md) · Decision record: [`docs/ADR.md`](docs/ADR.md) ·
 Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · P1 plan (not implemented): [`docs/P1_PLAN.md`](docs/P1_PLAN.md) ·
-Phase 2 verification: [`docs/PHASE2.md`](docs/PHASE2.md)
+Phase 2 verification: [`docs/PHASE2.md`](docs/PHASE2.md) · Phase 3 (persistence, LLM): [`docs/PHASE3.md`](docs/PHASE3.md)
 
 ```mermaid
 flowchart LR
@@ -32,7 +32,7 @@ flowchart LR
 │   ├── crates/
 │   │   ├── contracts/         Shared A2A payload DTOs + validation
 │   │   └── agent-runtime/     Shared agent plumbing: SDK server wiring + the one LLM client
-│   └── migrations/            SQLx migrations (embedded into `api`, run at startup)
+│   └── migrations/            SQLx migrations (embedded into `api`, applied by `api migrate`)
 ├── infrastructure/local/      compose.yaml for the local Postgres only (no deployment manifests in P0)
 ├── docs/                      ADR, architecture, P1 plan
 ├── scripts/                   dev.sh (run all services), check-secrets.sh (credential exposure check)
@@ -72,14 +72,18 @@ cp .env.example .env
 ./scripts/dev.sh
 ```
 
-5. Open <http://127.0.0.1:8080>. Migrations run automatically when the API starts.
+5. Open <http://127.0.0.1:8080>. `dev.sh` runs `api migrate` first; `api` itself only verifies
+   the schema and refuses to start if it is out of date.
 
 For frontend live-reload, keep `./scripts/dev.sh` running, then `cd frontend && npm run dev`
 (proxies `/api` to `:8080`) and open <http://localhost:4321>.
 
 **Real LLM:** set `INFERENCE_MODE=anthropic` and `ANTHROPIC_API_KEY` in `.env` (read by the agents only).
-**Supabase:** set `DATABASE_URL` to the direct or *session-pooler* (port 5432) URL with
-`sslmode=require`. The transaction pooler (6543) is incompatible with SQLx prepared statements.
+Mock mode needs no key; a provider failure is reported, never replaced by mock output.
+**Supabase:** use the direct or *session-pooler* (port 5432) URL with `sslmode=verify-full` and
+`sslrootcert=<project CA>` (`require` is refused: it does not verify the server). Run migrations
+with the owner (`DATABASE_MIGRATION_URL`) and the API with a least-privilege role; see
+[`docs/PHASE3.md`](docs/PHASE3.md#supabase-setup). The transaction pooler (6543) is incompatible.
 
 ## Checks
 
@@ -114,7 +118,9 @@ Every `/api/...` route is also served under the versioned prefix `/api/v1/...` (
 | `GET` | `/api/workflows?limit=&before=` | Newest first, cursor pagination |
 | `GET` | `/api/workflows/{id}` | Workflow + agent runs + draft + review |
 
-Errors: `{"error": {"code", "message"}}`.
+Errors: `{"error": {"code", "message"}}`. A failed workflow carries a stable `error_code`
+(e.g. `agent_unreachable`, `llm_rate_limited`, `interrupted`) and `failed_stage`
+(`worker` | `reviewer`); runs carry `error_code` too. Key on codes, not on `error` text.
 
 ## Calling an agent directly (any A2A client)
 

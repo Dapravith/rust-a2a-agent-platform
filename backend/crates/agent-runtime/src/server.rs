@@ -11,7 +11,7 @@ use a2a_server::jsonrpc::jsonrpc_router;
 use a2a_server::{
     AgentExecutor, DefaultRequestHandler, ExecutorContext, InMemoryTaskStore, StaticAgentCard,
 };
-use contracts::{MEDIA_TYPE_JSON, Validate, data_part, decode_parts};
+use contracts::{AgentFailure, MEDIA_TYPE_JSON, Validate, data_part, decode_parts};
 use futures::StreamExt;
 use futures::future::{AbortHandle, Abortable};
 use futures::stream::{self, BoxStream};
@@ -32,8 +32,12 @@ pub trait Skill: Send + Sync + 'static {
     /// Short label for logs (`mock` or `anthropic`).
     fn inference_mode(&self) -> &'static str;
 
-    /// Does the work. Errors become an A2A `failed` task with this message.
-    fn run(&self, input: Self::Input) -> impl Future<Output = Result<Self::Output, String>> + Send;
+    /// Does the work. An error becomes an A2A `failed` task whose status
+    /// message carries the text reason and the [`AgentFailure`] as JSON.
+    fn run(
+        &self,
+        input: Self::Input,
+    ) -> impl Future<Output = Result<Self::Output, AgentFailure>> + Send;
 }
 
 /// Builds a standards-compliant Agent Card advertising only JSON-RPC.
@@ -75,18 +79,33 @@ fn status(
     task_id: &str,
     context_id: &str,
     state: TaskState,
-    text: Option<String>,
+    parts: Option<Vec<Part>>,
 ) -> StreamResponse {
     StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
         task_id: task_id.into(),
         context_id: context_id.into(),
         status: TaskStatus {
             state,
-            message: text.map(|t| Message::new(Role::Agent, vec![Part::text(t)])),
+            message: parts.map(|p| Message::new(Role::Agent, p)),
             timestamp: None,
         },
         metadata: None,
     })
+}
+
+/// Longest failure reason an agent reports.
+const MAX_REASON_CHARS: usize = 500;
+
+/// Text part first (human-readable, read by generic A2A clients), then the
+/// structured report.
+fn failure_parts(failure: &AgentFailure) -> Vec<Part> {
+    let message: String = failure.message.chars().take(MAX_REASON_CHARS).collect();
+    let bounded = AgentFailure::new(failure.code, message);
+    let mut parts = vec![Part::text(bounded.to_string())];
+    if let Ok(p) = data_part(&bounded) {
+        parts.push(p);
+    }
+    parts
 }
 
 fn artifact(task_id: &str, context_id: &str, name: &str, part: Part) -> StreamResponse {
@@ -141,12 +160,24 @@ async fn run_skill<S: Skill>(
 ) -> Vec<StreamResponse> {
     let outcome = match decode_parts::<S::Input>(&parts) {
         // Bad input is the caller's fault: reject without doing work.
-        Err(e) => Err((TaskState::Rejected, format!("invalid input: {e}"))),
+        Err(e) => Err((
+            TaskState::Rejected,
+            vec![Part::text(format!("invalid input: {e}"))],
+        )),
         Ok(input) => match skill.run(input).await {
-            Ok(output) => data_part(&output).map_err(|e| (TaskState::Failed, e.to_string())),
-            Err(e) => Err((TaskState::Failed, e)),
+            Ok(output) => data_part(&output).map_err(|e| {
+                (
+                    TaskState::Failed,
+                    failure_parts(&AgentFailure::internal(e.to_string())),
+                )
+            }),
+            Err(f) => {
+                tracing::warn!(task_id = %task_id, code = %f.code, "skill failed");
+                Err((TaskState::Failed, failure_parts(&f)))
+            }
         },
     };
+    // return the outcome as a sequence of events: artifact (if any) then status.
     match outcome {
         Ok(part) => {
             tracing::info!(task_id = %task_id, outcome = "completed", "task finished");
@@ -155,9 +186,10 @@ async fn run_skill<S: Skill>(
                 status(&task_id, &context_id, TaskState::Completed, None),
             ]
         }
-        Err((state, reason)) => {
+        Err((state, parts)) => {
+            let reason = parts.first().and_then(Part::as_text).unwrap_or_default();
             tracing::warn!(task_id = %task_id, outcome = ?state, %reason, "task not completed");
-            vec![status(&task_id, &context_id, state, Some(reason))]
+            vec![status(&task_id, &context_id, state, Some(parts))]
         }
     }
 }

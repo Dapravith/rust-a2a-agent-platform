@@ -12,9 +12,13 @@ use a2a::*;
 use a2a_client::A2AClientFactory;
 use a2a_client::agent_card::AgentCardResolver;
 use a2a_client::jsonrpc::JsonRpcTransportFactory;
-use contracts::{ContractError, MEDIA_TYPE_JSON, Validate, decode_artifacts, decode_parts};
+use contracts::{
+    AgentFailure, ContractError, MEDIA_TYPE_JSON, Validate, decode_artifacts, decode_parts,
+};
 use serde::de::DeserializeOwned;
 use url::Url;
+
+use crate::error_code::ErrorCode;
 
 const MAX_ERROR_CHARS: usize = 500;
 /// Upper bound for the best-effort CancelTask sent after a deadline.
@@ -33,7 +37,11 @@ pub enum AgentError {
     #[error("agent did not finish within {0:?}")]
     Timeout(Duration),
     #[error("agent task ended in state {state}: {message}")]
-    TaskFailed { state: String, message: String },
+    TaskFailed {
+        state: String,
+        message: String,
+        code: ErrorCode,
+    },
     #[error("agent requested an unsupported interaction ({0})")]
     Unsupported(String),
     #[error("agent returned an invalid artifact: {0}")]
@@ -41,6 +49,20 @@ pub enum AgentError {
 }
 
 impl AgentError {
+    /// Stable code persisted with the failed run and workflow.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Unreachable(_) => ErrorCode::AgentUnreachable,
+            Self::InvalidCard(_) => ErrorCode::AgentCardInvalid,
+            Self::UntrustedCard(_) => ErrorCode::AgentUntrusted,
+            Self::Protocol(_) => ErrorCode::AgentProtocolError,
+            Self::Timeout(_) => ErrorCode::AgentTimeout,
+            Self::TaskFailed { code, .. } => *code,
+            Self::Unsupported(_) => ErrorCode::AgentUnsupportedInteraction,
+            Self::InvalidArtifact(_) => ErrorCode::ArtifactInvalid,
+        }
+    }
+
     /// A bounded, user-safe description stored with the workflow: keeps the
     /// error category, drops URLs (internal topology). Full text is logged.
     pub fn safe_message(&self) -> String {
@@ -286,16 +308,25 @@ fn finish_task<T: DeserializeOwned + Validate>(
             state,
         }),
         TaskState::Failed | TaskState::Rejected | TaskState::Canceled => {
-            let message = task
-                .status
-                .message
-                .as_ref()
+            let status_msg = task.status.message.as_ref();
+            let message = status_msg
                 .and_then(Message::text)
                 .unwrap_or("no reason given")
                 .chars()
                 .take(MAX_ERROR_CHARS)
                 .collect();
-            Err(AgentError::TaskFailed { state, message })
+            let code = match task.status.state {
+                TaskState::Rejected => ErrorCode::AgentRejected,
+                TaskState::Canceled => ErrorCode::AgentCanceled,
+                _ => status_msg
+                    .and_then(|m| AgentFailure::from_parts(&m.parts))
+                    .map_or(ErrorCode::AgentFailed, |f| ErrorCode::from_agent(f.code)),
+            };
+            Err(AgentError::TaskFailed {
+                state,
+                message,
+                code,
+            })
         }
         // input-required, auth-required, unspecified: not part of this workflow.
         _ => Err(AgentError::Unsupported(state)),
