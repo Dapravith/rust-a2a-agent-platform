@@ -67,3 +67,18 @@ A developer asks: *“Propose validation rules for a Rust API that creates crowd
 5. For logs and incident response, is **Grafana/Loki** sufficient? Would Dozzle add meaningful value?
 
 **Review instruction:** Please comment on incorrect assumptions, unnecessary complexity, missing acceptance tests, and high-impact risks. Suggestions beyond P0/P1 should be listed as future enhancements rather than expanding the MVP.
+
+## 9. Proposed extension (Phase 6): human-supervised multi-agent engineering
+
+*Status: approved proposed extension; does not change P0/P1 acceptance. See `docs/ADR.md` ADR-003 and `docs/PHASE6.md`.*
+
+PRD changes required by Phase 6 (the original §4 lists "extra agents", "MCP/tool execution" and "automated repository edits" as out of scope; this section moves them into a gated extension):
+
+1. **Scope.** Six application roles (Project Manager, Project Coordinator, Developer, Code Reviewer, QA Tester, AI Quality Lead) collaborate on one engineering request. Roles are policies, not protocol concepts.
+2. **Human authority.** Two mandatory human gates: plan approval and delivery decision (approve / request changes / reject); any authenticated human may cancel (requesters: own workflows only). AI output, including the Quality Lead's recommendation, is advisory and can never move a workflow into an approved state.
+3. **Identity.** Human decisions require server-side authentication against a configured identity provider. Without one, approvals are disabled and reported BLOCKED.
+4. **Delivery boundary.** "Approved for delivery" makes a candidate *eligible* for a separate, authorized delivery process. Agents never push to protected branches, merge, deploy, change policy, alter audit history, or read other credentials. GitOps/deployment remains out of scope.
+5. **Execution.** Code-writing agents run only in an isolated workspace with an allowlist of checks (by id, not shell strings), scoped paths, no production credentials and restricted network. Containers alone are not assumed to be a sufficient boundary.
+6. **Evidence.** Typed, versioned, hashed artifacts (plan, assignment, candidate, review, QA, assessment, decision, manifest); QA evidence must reference the exact candidate commit; failed evidence cannot be approved.
+7. **Budgets.** Bounded plan/delivery revision loops and agent runs per workflow; provider cost reporting per run where the provider reports it.
+8. **Acceptance.** Phase 6 is complete only per the quality gate in `docs/PHASE6.md` §9 (real transport, real provider, real isolation, real IdP), not on simulated tests alone.

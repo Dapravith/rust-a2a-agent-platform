@@ -9,6 +9,10 @@ publish.workspace = true
 
 [dependencies]
 contracts = { workspace = true }
+engineering = { workspace = true }
+agent-runtime = { workspace = true }
+sha2 = "=0.10.9"
+hex = "=0.4.3"
 a2a = { workspace = true }
 a2a-client = { workspace = true }
 axum = { workspace = true }
@@ -27,7 +31,6 @@ sqlx = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process"] }
-agent-runtime = { workspace = true }
 worker-agent = { workspace = true }
 reviewer-agent = { workspace = true }
 a2a-server = { workspace = true }
