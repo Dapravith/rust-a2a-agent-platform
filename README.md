@@ -96,6 +96,8 @@ cd backend && DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54329/a2a carg
 ```
 
 Database tests use `#[sqlx::test]`, which creates and drops an isolated database per test.
+If Docker is busy with other workloads and tests fail with `failed to connect test pool: PoolTimedOut`,
+reduce concurrent test databases with `cargo test --workspace -- --test-threads=4`.
 
 ## REST API (`backend/apps/api`)
 
