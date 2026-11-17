@@ -1,0 +1,89 @@
+---
+// Workflow history: `GET /api/workflows`, newest first, with the API's cursor
+// (`next_before`) exposed as plain links, so paging needs no JavaScript.
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import PageHeader from "../../components/navigation/PageHeader.astro";
+import Card from "../../components/ui/Card.astro";
+import Button from "../../components/ui/Button.astro";
+import EmptyState from "../../components/ui/EmptyState.astro";
+import ErrorState from "../../components/ui/ErrorState.astro";
+import WorkflowList from "../../features/workflows/components/WorkflowList.astro";
+import { api } from "../../lib/config.ts";
+import { describeLoadError } from "../../lib/errors.ts";
+import { isCursor } from "../../features/workflows/api.ts";
+import type { WorkflowPage } from "../../features/workflows/schemas.ts";
+
+const rawBefore = Astro.url.searchParams.get("before");
+const before = rawBefore && isCursor(rawBefore) ? rawBefore : undefined;
+if (rawBefore && !before) return Astro.redirect("/workflows", 302);
+
+let page: WorkflowPage | null = null;
+let error: ReturnType<typeof describeLoadError> | null = null;
+try {
+  page = await api.list({ before });
+} catch (e) {
+  error = describeLoadError(e, "workflow history");
+  Astro.response.status = 503;
+}
+const olderHref = page?.next_before ? `/workflows?before=${encodeURIComponent(page.next_before)}` : null;
+---
+
+<DashboardLayout title="Workflows" active="workflows">
+  <PageHeader
+    title="Workflows"
+    description="Every submitted task, newest first, including failed runs. Open one to see the Worker draft and the Reviewer's verdict."
+  >
+    <Fragment slot="actions">
+      <Button href="/" variant="primary" icon="send">New task</Button>
+    </Fragment>
+  </PageHeader>
+
+  {
+    error ? (
+      <ErrorState title={error.title} detail={error.detail} />
+    ) : page && page.items.length > 0 ? (
+      <>
+        <Card flush>
+          <h2 class="sr-only">{before ? "Older workflows" : "Latest workflows"}</h2>
+          <WorkflowList items={page.items} />
+        </Card>
+        {(before || olderHref) && (
+          <nav class="pager" aria-label="Pagination">
+            {before ? (
+              <Button href="/workflows" size="sm" icon="arrow-left">
+                Newest
+              </Button>
+            ) : (
+              <span />
+            )}
+            {olderHref && (
+              <Button href={olderHref} size="sm" iconEnd="arrow-right">
+                Older
+              </Button>
+            )}
+          </nav>
+        )}
+      </>
+    ) : (
+      <Card>
+        <EmptyState
+          icon="list"
+          title={before ? "No older workflows" : "No workflows yet"}
+          description={before ? "You've reached the first workflow ever submitted." : "Submit a question from the dashboard and its Worker draft and review will be listed here."}
+        >
+          <Button href={before ? "/workflows" : "/"} variant="primary" icon={before ? "arrow-left" : "send"}>
+            {before ? "Back to newest" : "Submit a task"}
+          </Button>
+        </EmptyState>
+      </Card>
+    )
+  }
+</DashboardLayout>
+
+<style>
+  .pager {
+    display: flex;
+    justify-content: space-between;
+    margin-top: var(--space-4);
+  }
+</style>

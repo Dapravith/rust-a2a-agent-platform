@@ -1,0 +1,18 @@
+---
+// Shown for unexpected server errors. Never renders the error itself: stack
+// traces and internals stay in the server log.
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+import EmptyState from "../components/ui/EmptyState.astro";
+import PageHeader from "../components/navigation/PageHeader.astro";
+---
+
+<DashboardLayout title="Something went wrong">
+  <PageHeader title="Something went wrong" />
+  <Card>
+    <EmptyState icon="alert-circle" title="The portal hit an unexpected error" description="Nothing was submitted on your behalf. Reload the page, or go back to the dashboard.">
+      <Button href="/" variant="primary" icon="home">Dashboard</Button>
+    </EmptyState>
+  </Card>
+</DashboardLayout>

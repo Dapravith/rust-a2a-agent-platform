@@ -1,0 +1,136 @@
+---
+// Queued → Worker → Reviewer → Completed/Failed, mapped from real states
+// (src/features/workflows/present.ts). No percentages: steps only.
+import Icon, { type IconName } from "../../../components/ui/Icon.astro";
+import { formatUtc } from "../../../lib/format.ts";
+import { stepStateText, type StepState, type TimelineStep } from "../present.ts";
+
+interface Props {
+  steps: TimelineStep[];
+}
+const { steps } = Astro.props;
+const ICON: Record<StepState, IconName> = {
+  complete: "check-circle",
+  current: "loader",
+  failed: "x-circle",
+  upcoming: "circle",
+  skipped: "circle-dashed",
+};
+---
+
+<ol class="timeline">
+  {
+    steps.map((s) => (
+      <li class:list={["timeline__step", `is-${s.state}`]} aria-current={s.state === "current" ? "step" : undefined}>
+        <span class="timeline__marker">
+          <Icon name={ICON[s.state]} size={18} class:list={[s.state === "current" && "timeline__spin"]} />
+        </span>
+        <div class="timeline__body">
+          <p class="timeline__label">
+            {s.label}
+            <span class="timeline__state">{stepStateText(s.state)}</span>
+          </p>
+          <p class="timeline__detail">{s.detail}</p>
+          {s.at && (
+            <time class="timeline__time" datetime={s.at} data-local>
+              {formatUtc(s.at)}
+            </time>
+          )}
+        </div>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .timeline__step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    gap: var(--space-3);
+    padding-bottom: var(--space-4);
+  }
+  .timeline__step:last-child {
+    padding-bottom: 0;
+  }
+  /* Connector between markers */
+  .timeline__step:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    left: 9.5px;
+    top: 24px;
+    bottom: 2px;
+    width: 1px;
+    background: var(--color-border-strong);
+  }
+  .timeline__step.is-complete:not(:last-child)::before {
+    background: var(--color-success-fg);
+  }
+  .timeline__marker {
+    display: inline-flex;
+    width: 20px;
+    height: 20px;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-disabled);
+    background: var(--color-surface);
+  }
+  .is-complete .timeline__marker {
+    color: var(--color-success-fg);
+  }
+  .is-current .timeline__marker {
+    color: var(--color-info-fg);
+  }
+  .is-failed .timeline__marker {
+    color: var(--color-error-fg);
+  }
+  .timeline__label {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-weight: var(--weight-semibold);
+    line-height: 20px;
+  }
+  .timeline__state {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-secondary);
+  }
+  .is-current .timeline__state {
+    color: var(--color-info-text);
+  }
+  .is-failed .timeline__state {
+    color: var(--color-error-text);
+  }
+  .timeline__detail {
+    margin-top: 2px;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    overflow-wrap: anywhere;
+  }
+  .is-upcoming .timeline__label,
+  .is-skipped .timeline__label {
+    color: var(--color-text-secondary);
+    font-weight: var(--weight-medium);
+  }
+  .timeline__time {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .timeline :global(.timeline__spin) {
+    animation: timeline-spin 1s linear infinite;
+  }
+  @keyframes timeline-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+</style>

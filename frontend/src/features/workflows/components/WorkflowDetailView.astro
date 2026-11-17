@@ -1,0 +1,279 @@
+---
+// Everything on the workflow detail page below the frame. Rendered both by the
+// page and by the `/workflows/{id}/live` partial, so live updates reuse the
+// exact same server markup (no second renderer in the browser).
+import PageHeader from "../../../components/navigation/PageHeader.astro";
+import Button from "../../../components/ui/Button.astro";
+import Callout from "../../../components/ui/Callout.astro";
+import Card from "../../../components/ui/Card.astro";
+import CopyButton from "../../../components/ui/CopyButton.astro";
+import DraftPanel from "../../agents/components/DraftPanel.astro";
+import ReviewPanel from "../../agents/components/ReviewPanel.astro";
+import ExecutionRecord from "./ExecutionRecord.astro";
+import WorkflowBadge from "./WorkflowBadge.astro";
+import WorkflowTimeline from "./WorkflowTimeline.astro";
+import { formatDuration, formatUtc, plural, shortId, truncate } from "../../../lib/format.ts";
+import { AGENT_LABEL, deriveTimeline, describeFailure, detailSignature, statusSentence } from "../present.ts";
+import { isActive, type WorkflowDetail } from "../schemas.ts";
+
+interface Props {
+  workflow: WorkflowDetail;
+}
+const { workflow: w } = Astro.props;
+const active = isActive(w.status);
+const running = (agent: "worker" | "reviewer") => w.runs.some((r) => r.agent === agent && r.status === "running");
+const failure = w.status === "failed" ? describeFailure(w.error_code) : null;
+const findingCount = w.review?.findings.length ?? 0;
+const total = formatDuration(w.started_at, w.finished_at);
+const passText = `The Reviewer independently assessed the Worker's draft and found it acceptable${
+  findingCount > 0 ? `, with ${plural(findingCount, "minor note")}` : ""
+}.`;
+---
+
+<div
+  class="detail"
+  id="workflow-live"
+  data-workflow-id={w.id}
+  data-active={String(active)}
+  data-signature={detailSignature(w)}
+  data-status-text={statusSentence(w)}
+>
+  <div class="detail__header">
+    <PageHeader title={truncate(w.question, 140)} crumbs={[{ href: "/workflows", label: "Workflows" }]}>
+      <Fragment slot="crumb">{shortId(w.id)}</Fragment>
+      <div slot="meta" class="detail__meta">
+        <WorkflowBadge status={w.status} />
+        {w.verdict && <WorkflowBadge verdict={w.verdict} />}
+        <span class="detail__submitted">
+          Submitted{" "}
+          <time datetime={w.created_at} data-local>
+            {formatUtc(w.created_at)}
+          </time>
+        </span>
+      </div>
+    </PageHeader>
+  </div>
+
+  <div class="detail__outcome">
+    {
+      active ? (
+        <Callout tone="info" title={statusSentence(w)} icon="loader">
+          <p>This page updates automatically. You can leave it; the workflow keeps running on the server.</p>
+          <p class="detail__live" data-live-indicator hidden />
+        </Callout>
+      ) : w.status === "completed" && w.verdict === "needs_changes" ? (
+        <Callout tone="warning" title="Completed: the Reviewer requested changes">
+          <p>
+            The workflow ran successfully. The Reviewer found {plural(findingCount, "issue")} the draft should address before
+            you rely on it. <a href="#review">See the findings</a>.
+          </p>
+        </Callout>
+      ) : w.status === "completed" ? (
+        <Callout tone="success" title="Completed: the draft passed review">
+          <p>{passText}</p>
+        </Callout>
+      ) : (
+        failure && (
+          <Callout tone="error" title={failure.title}>
+            <p>{failure.guidance}</p>
+            <dl class="failure">
+              {w.failed_stage && (
+                <div>
+                  <dt>Failed at</dt>
+                  <dd>{AGENT_LABEL[w.failed_stage]} step</dd>
+                </div>
+              )}
+              {w.error_code && (
+                <div>
+                  <dt>Error code</dt>
+                  <dd class="mono">{w.error_code}</dd>
+                </div>
+              )}
+              {w.error && (
+                <div class="failure__wide">
+                  <dt>Details</dt>
+                  <dd>{w.error}</dd>
+                </div>
+              )}
+            </dl>
+            <div class="callout__actions">
+              <Button href="/" size="sm" variant="primary" icon="send">
+                New task
+              </Button>
+            </div>
+          </Callout>
+        )
+      )
+    }
+  </div>
+
+  <aside class="detail__aside" aria-label="Workflow progress">
+    <Card title="Progress" id="progress">
+      <WorkflowTimeline steps={deriveTimeline(w)} />
+    </Card>
+    <Card title="Details" id="properties">
+      <dl class="props">
+        <div>
+          <dt>Workflow ID</dt>
+          <dd class="props__id">
+            <span class="mono" id="workflow-id">{w.id}</span>
+            <CopyButton target="workflow-id" label="Copy ID" />
+          </dd>
+        </div>
+        <div>
+          <dt>Submitted</dt>
+          <dd><time datetime={w.created_at} data-local>{formatUtc(w.created_at)}</time></dd>
+        </div>
+        <div>
+          <dt>Started</dt>
+          <dd>{w.started_at ? <time datetime={w.started_at} data-local>{formatUtc(w.started_at)}</time> : "Not yet"}</dd>
+        </div>
+        <div>
+          <dt>Finished</dt>
+          <dd>{w.finished_at ? <time datetime={w.finished_at} data-local>{formatUtc(w.finished_at)}</time> : "Not yet"}</dd>
+        </div>
+        <div>
+          <dt>Duration</dt>
+          <dd>{total ?? "—"}</dd>
+        </div>
+      </dl>
+    </Card>
+  </aside>
+
+  <div class="detail__main">
+    <Card title="Task" id="task" description="The question as submitted">
+      <p class="task-text">{w.question}</p>
+    </Card>
+    <DraftPanel draft={w.draft} status={w.status} working={running("worker")} />
+    <ReviewPanel review={w.review} status={w.status} working={running("reviewer")} hasDraft={w.draft !== null} />
+    <ExecutionRecord runs={w.runs} />
+  </div>
+</div>
+
+<style>
+  .detail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas:
+      "header header"
+      "outcome aside"
+      "main aside";
+    grid-template-rows: auto auto 1fr;
+    column-gap: var(--space-5);
+    align-items: start;
+  }
+  .detail__header {
+    grid-area: header;
+    min-width: 0;
+  }
+  .detail__outcome {
+    grid-area: outcome;
+    min-width: 0;
+  }
+  .detail__outcome:not(:empty) {
+    margin-bottom: var(--space-5);
+  }
+  .detail__aside {
+    grid-area: aside;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    position: sticky;
+    top: var(--space-6);
+    min-width: 0;
+  }
+  .detail__main {
+    grid-area: main;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+  .detail__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  .detail__submitted {
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    margin-left: var(--space-1);
+  }
+  .detail__live:empty {
+    display: none;
+  }
+  .detail__live {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+  }
+  .detail :global(.page-header__title) {
+    font-size: var(--text-xl);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .task-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: var(--text-lg);
+    line-height: var(--leading-relaxed);
+  }
+  .failure {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+  }
+  .failure__wide {
+    flex-basis: 100%;
+  }
+  .failure dt {
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+  }
+  .props {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .props dt {
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+  }
+  .props dd {
+    margin-top: 2px;
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+  .props__id {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  @media (max-width: 1100px) {
+    .detail {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "header"
+        "outcome"
+        "aside"
+        "main";
+      grid-template-rows: none;
+    }
+    .detail__aside {
+      position: static;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: var(--space-5);
+    }
+  }
+  @media (max-width: 640px) {
+    .detail__aside {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

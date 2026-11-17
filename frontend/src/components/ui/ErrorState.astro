@@ -1,0 +1,22 @@
+---
+// A region that could not load. Always offers a way to recover.
+import Button from "./Button.astro";
+import Callout from "./Callout.astro";
+
+interface Props {
+  title: string;
+  detail: string;
+  /** Retry target; defaults to reloading the current page. */
+  retryHref?: string;
+  retryLabel?: string;
+}
+const { title, detail, retryHref = Astro.url.pathname + Astro.url.search, retryLabel = "Try again" } = Astro.props;
+---
+
+<Callout tone="error" title={title}>
+  <p>{detail}</p>
+  <div class="callout__actions">
+    <Button href={retryHref} size="sm" icon="refresh">{retryLabel}</Button>
+    <slot />
+  </div>
+</Callout>

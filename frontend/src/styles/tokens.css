@@ -1,0 +1,145 @@
+/*
+ * Design tokens. Components reference only these custom properties, never raw
+ * colours, so a theme is a single block of overrides (see the dark block).
+ * Contrast pairs are checked by tests/unit/contrast.test.ts (WCAG 2.2 AA).
+ */
+:root {
+  color-scheme: light;
+
+  /* Neutrals */
+  --color-canvas: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f1f5f9;
+  --color-surface-hover: #f1f5f9;
+  --color-surface-sunken: #f8fafc;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-text: #111827;
+  --color-text-secondary: #5b6b80;
+  --color-text-placeholder: #64748b;
+  --color-text-disabled: #94a3b8;
+
+  /* Accent */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-subtle: #eff6ff;
+  --color-accent-border: #bfdbfe;
+  --color-accent-text: #1d4ed8;
+  --color-on-accent: #ffffff;
+
+  /* Status: `-fg` for icons/borders (3:1), `-text` for text on `-bg` (4.5:1) */
+  --color-success-fg: #16a34a;
+  --color-success-text: #15803d;
+  --color-success-bg: #f0fdf4;
+  --color-success-border: #bbf7d0;
+  --color-warning-fg: #d97706;
+  --color-warning-text: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: #fde68a;
+  --color-error-fg: #dc2626;
+  --color-error-text: #b91c1c;
+  --color-error-bg: #fef2f2;
+  --color-error-border: #fecaca;
+  --color-info-fg: #2563eb;
+  --color-info-text: #1d4ed8;
+  --color-info-bg: #eff6ff;
+  --color-info-border: #bfdbfe;
+  --color-neutral-text: #475569;
+  --color-neutral-bg: #f1f5f9;
+  --color-neutral-border: #e2e8f0;
+
+  /* Focus */
+  --focus-ring-color: #2563eb;
+
+  /* Typography */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --text-xs: 0.75rem; /* 12px */
+  --text-sm: 0.8125rem; /* 13px */
+  --text-md: 0.875rem; /* 14px: UI default */
+  --text-lg: 0.9375rem; /* 15px: long-form agent output */
+  --text-xl: 1.125rem; /* 18px: section titles */
+  --text-2xl: 1.5rem; /* 24px: page titles */
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* Spacing scale: 4 / 8 / 12 / 16 / 24 / 32 / 48 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Shape and depth */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-full: 999px;
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-md: 0 1px 3px rgb(15 23 42 / 0.06), 0 1px 2px rgb(15 23 42 / 0.04);
+
+  /* Layout */
+  --sidebar-width: 232px;
+  --content-max: 1120px;
+  --control-height: 40px;
+  --control-height-sm: 32px;
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Dark theme: same names, different values. Opt-in via the OS setting. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-canvas: #0b0f17;
+    --color-surface: #111722;
+    --color-surface-subtle: #172030;
+    --color-surface-hover: #182233;
+    --color-surface-sunken: #0d131d;
+    --color-border: #232d3d;
+    --color-border-strong: #334155;
+    --color-text: #e6eaf0;
+    --color-text-secondary: #98a4b5;
+    --color-text-placeholder: #8a96a8;
+    --color-text-disabled: #5b6678;
+
+    --color-accent: #2563eb;
+    --color-accent-hover: #1d4ed8;
+    --color-accent-subtle: #13213a;
+    --color-accent-border: #1e3a66;
+    --color-accent-text: #8ab4ff;
+    --color-on-accent: #ffffff;
+
+    --color-success-fg: #22c55e;
+    --color-success-text: #6ee7a0;
+    --color-success-bg: #0e2318;
+    --color-success-border: #1c4630;
+    --color-warning-fg: #f59e0b;
+    --color-warning-text: #fbbf5a;
+    --color-warning-bg: #2a1d08;
+    --color-warning-border: #5a3d0c;
+    --color-error-fg: #ef4444;
+    --color-error-text: #fca5a5;
+    --color-error-bg: #2a1012;
+    --color-error-border: #5c1d22;
+    --color-info-fg: #60a5fa;
+    --color-info-text: #93c5fd;
+    --color-info-bg: #13213a;
+    --color-info-border: #1e3a66;
+    --color-neutral-text: #b4bfcd;
+    --color-neutral-bg: #1a2433;
+    --color-neutral-border: #2a3646;
+
+    --focus-ring-color: #60a5fa;
+    --shadow-sm: none;
+    --shadow-md: none;
+  }
+}

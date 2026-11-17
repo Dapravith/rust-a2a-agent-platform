@@ -1,0 +1,115 @@
+---
+// Inline message block for outcomes, warnings and errors. Pass `role="alert"`
+// only for errors that appear in response to a user action.
+import type { Tone } from "../../features/workflows/present.ts";
+import Icon, { type IconName } from "./Icon.astro";
+
+interface Props {
+  tone: Tone;
+  title: string;
+  icon?: IconName;
+  role?: "alert" | "status";
+  id?: string;
+  /** Move focus here on page load (server-rendered errors after a submit). */
+  autofocus?: boolean;
+  class?: string;
+}
+const DEFAULT_ICON: Record<Tone, IconName> = {
+  neutral: "info",
+  info: "info",
+  success: "check-circle",
+  warning: "alert-triangle",
+  error: "alert-circle",
+};
+const { tone, title, icon = DEFAULT_ICON[tone], role, id, autofocus = false, class: className } = Astro.props;
+const hasBody = Astro.slots.has("default");
+---
+
+<div class:list={["callout", `callout--${tone}`, className]} role={role} id={id} tabindex={role === "alert" ? -1 : undefined} autofocus={autofocus || undefined}>
+  <span class="callout__icon"><Icon name={icon} size={18} /></span>
+  <div class="callout__content">
+    <p class="callout__title">{title}</p>
+    {
+      hasBody && (
+        <div class="callout__body">
+          <slot />
+        </div>
+      )
+    }
+  </div>
+</div>
+
+<style>
+  .callout {
+    display: flex;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid;
+    border-radius: var(--radius-md);
+    min-width: 0;
+  }
+  .callout__icon {
+    display: inline-flex;
+    padding-top: 1px;
+  }
+  .callout__content {
+    min-width: 0;
+    flex: 1;
+  }
+  .callout__title {
+    font-weight: var(--weight-semibold);
+    color: var(--color-text);
+  }
+  .callout__body {
+    margin-top: var(--space-1);
+    color: var(--color-text);
+    overflow-wrap: anywhere;
+  }
+  .callout__body :global(p + p) {
+    margin-top: var(--space-2);
+  }
+  .callout__body :global(.callout__actions) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  .callout--neutral {
+    background: var(--color-neutral-bg);
+    border-color: var(--color-neutral-border);
+  }
+  .callout--neutral .callout__icon {
+    color: var(--color-neutral-text);
+  }
+  .callout--info {
+    background: var(--color-info-bg);
+    border-color: var(--color-info-border);
+  }
+  .callout--info .callout__icon {
+    color: var(--color-info-fg);
+  }
+  .callout--success {
+    background: var(--color-success-bg);
+    border-color: var(--color-success-border);
+  }
+  .callout--success .callout__icon {
+    color: var(--color-success-fg);
+  }
+  .callout--warning {
+    background: var(--color-warning-bg);
+    border-color: var(--color-warning-border);
+  }
+  .callout--warning .callout__icon {
+    color: var(--color-warning-fg);
+  }
+  .callout--error {
+    background: var(--color-error-bg);
+    border-color: var(--color-error-border);
+  }
+  .callout--error .callout__icon {
+    color: var(--color-error-fg);
+  }
+  .callout:focus-visible {
+    outline-offset: 3px;
+  }
+</style>

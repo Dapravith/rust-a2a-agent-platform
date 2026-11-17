@@ -1,0 +1,33 @@
+---
+// Document shell: metadata, global styles and the small shared enhancement
+// script. Every page works without JavaScript; scripts only add polish
+// (local time zones, copy buttons, live workflow updates).
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description?: string;
+}
+const { title, description = "Submit software engineering tasks to a Worker agent and an independent Reviewer agent over A2A." } =
+  Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>{title} · A2A Review</title>
+    <slot name="head" />
+  </head>
+  <body>
+    <slot />
+    <script>
+      import "../scripts/enhance.ts";
+    </script>
+  </body>
+</html>

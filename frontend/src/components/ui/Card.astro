@@ -1,0 +1,120 @@
+---
+// Surface container. With `title`, renders a header and labels the section by it.
+import type { IconName } from "./Icon.astro";
+import Icon from "./Icon.astro";
+
+interface Props {
+  title?: string;
+  description?: string;
+  icon?: IconName;
+  /** Heading level for the title (default 2). */
+  level?: 2 | 3;
+  id?: string;
+  /** Remove body padding, e.g. for edge-to-edge lists. */
+  flush?: boolean;
+  class?: string;
+}
+const { title, description, icon, level = 2, id, flush = false, class: className } = Astro.props;
+const headingId = title && id ? `${id}-title` : undefined;
+const Heading = `h${level}` as "h2" | "h3";
+const hasActions = Astro.slots.has("actions");
+---
+
+<section class:list={["card", className]} id={id} aria-labelledby={headingId}>
+  {
+    title && (
+      <header class="card__header">
+        <div class="card__heading">
+          {icon && (
+            <span class="card__icon">
+              <Icon name={icon} size={16} />
+            </span>
+          )}
+          <div>
+            <Heading class="card__title" id={headingId}>
+              {title}
+            </Heading>
+            {description && <p class="card__description">{description}</p>}
+          </div>
+        </div>
+        {hasActions && (
+          <div class="card__actions">
+            <slot name="actions" />
+          </div>
+        )}
+      </header>
+    )
+  }
+  <div class:list={["card__body", flush && "card__body--flush"]}>
+    <slot />
+  </div>
+</section>
+
+<style>
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    min-width: 0;
+  }
+  .card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .card__heading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .card__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+  }
+  .card__title {
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+    line-height: 20px;
+  }
+  .card__description {
+    margin-top: 2px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+  .card__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+  }
+  .card__body {
+    padding: var(--space-5);
+  }
+  .card__body--flush {
+    padding: 0;
+  }
+  @media (max-width: 640px) {
+    .card__header {
+      padding: var(--space-3) var(--space-4);
+    }
+    .card__body {
+      padding: var(--space-4);
+    }
+    .card__body--flush {
+      padding: 0;
+    }
+  }
+</style>

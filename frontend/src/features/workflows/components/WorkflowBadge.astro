@@ -1,0 +1,42 @@
+---
+// Badge for a workflow status, a review verdict or a finding severity.
+import StatusBadge from "../../../components/ui/StatusBadge.astro";
+import type { IconName } from "../../../components/ui/Icon.astro";
+import type { Severity, Verdict, WorkflowStatus } from "../schemas.ts";
+import {
+  SEVERITY_LABEL,
+  SEVERITY_TONE,
+  STATUS_LABEL,
+  STATUS_TONE,
+  VERDICT_LABEL,
+  VERDICT_TONE,
+} from "../present.ts";
+
+type Props = { status: WorkflowStatus } | { verdict: Verdict } | { severity: Severity };
+
+const STATUS_ICON: Record<WorkflowStatus, IconName> = {
+  queued: "clock",
+  running: "loader",
+  completed: "check-circle",
+  failed: "x-circle",
+};
+const VERDICT_ICON: Record<Verdict, IconName> = { pass: "check", needs_changes: "alert-triangle" };
+
+const p = Astro.props;
+let tone, label, icon: IconName | undefined, spin = false;
+if ("status" in p) {
+  tone = STATUS_TONE[p.status];
+  label = STATUS_LABEL[p.status];
+  icon = STATUS_ICON[p.status];
+  spin = p.status === "running";
+} else if ("verdict" in p) {
+  tone = VERDICT_TONE[p.verdict];
+  label = VERDICT_LABEL[p.verdict];
+  icon = VERDICT_ICON[p.verdict];
+} else {
+  tone = SEVERITY_TONE[p.severity];
+  label = SEVERITY_LABEL[p.severity];
+}
+---
+
+<StatusBadge tone={tone} icon={icon} spin={spin}>{label}</StatusBadge>

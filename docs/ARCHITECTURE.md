@@ -4,7 +4,7 @@
 
 | Component | Owns | Never does |
 |---|---|---|
-| Astro dashboard | Submission form, history, detail view (static, same origin) | Hold secrets, talk to agents or DB, render agent output as HTML |
+| Astro portal (`frontend/`, SSR) | Pages, forms, presentation of workflow state, typed calls to the REST API (server-side), security headers, CSRF origin check | Hold backend secrets, talk to agents or DB, decide workflow rules, render agent Markdown unsanitized (ADR-002) |
 | API + orchestrator (`backend/apps/api`) | Request validation, admission control, agent discovery + trust, workflow sequence, timeouts, persistence | Run LLM calls, execute generated content |
 | Worker agent (`backend/apps/worker-agent`) | One skill: `draft-answer` | Call the Reviewer, access the DB |
 | Reviewer agent (`backend/apps/reviewer-agent`) | One skill: `review-draft` | Call the Worker, access the DB |
@@ -19,7 +19,7 @@ Agents publish only a JSON-RPC interface; the orchestrator registers only the JS
 
 ```mermaid
 sequenceDiagram
-  participant UI as Astro UI
+  participant UI as Astro portal (SSR)
   participant O as API (orchestrator)
   participant DB as Postgres
   participant W as Worker (A2A)
@@ -36,7 +36,7 @@ sequenceDiagram
   O->>R: SendMessage(data: {question, draft})
   R-->>O: Task(completed, artifact "review")
   O->>DB: review artifact; workflow completed + verdict
-  UI->>O: GET /api/workflows/{id} (polls every 1.5 s while active)
+  UI->>O: GET /api/workflows/{id} (browser polls the portal's /workflows/{id}/live every 2 s while active)
 ```
 
 ## State model
@@ -86,7 +86,7 @@ text part (`"<code>: <reason>"`) and a data part `{ "code", "message" }` with `c
 | Error exposure | Errors stored on workflows/runs are client-visible, so they carry only a category (`internal error…`, `agent unreachable…`) with URLs redacted; full details go to the server logs |
 | Agent memory | Known limit: the SDK 0.5.3 `InMemoryTaskStore` keeps every task for the process lifetime (a bound exists only in unreleased SDK `main`). With one workflow at a time this is ~2 small tasks per workflow; restart agents periodically until the SDK release |
 | Agent trust | Agents come only from configured URLs (never from user input); card name must match; only JSON-RPC interfaces on the configured origin are used; redirects disabled. An unreachable agent (`agent unreachable`) is distinguished from one that answers with a missing or malformed card (`invalid agent card`) |
-| Untrusted LLM output | Structured JSON output, strict decode + validation on both agent and orchestrator; UI renders text only (`textContent`), strict CSP with no inline scripts |
+| Untrusted LLM output | Structured JSON output, strict decode + validation on both agent and orchestrator; portal escapes all text and renders draft Markdown server-side with raw HTML disabled, a link-scheme allowlist and no images; strict CSP with no inline scripts or styles |
 | Secrets | Env only, validated at startup; `DATABASE_URL` redacted in logs; API key never logged; nothing server-side in the static bundle (CI check) |
 | Input limits | API: 16 KB request body, question 10–4000 chars, control characters rejected. Agents: 256 KiB per JSON-RPC request, enforced with `RequestBodyLimitLayer` (the SDK's `jsonrpc_router` sets its own 10 MiB `DefaultBodyLimit`, which would override an outer `DefaultBodyLimit`) |
 | SQL | Parameterized, and `&'static str` only (sqlx 0.9 `SqlSafeStr`) |

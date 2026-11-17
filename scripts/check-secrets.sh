@@ -17,10 +17,15 @@ if git rev-parse --git-dir >/dev/null 2>&1 && git ls-files | grep -E '(^|/)\.env
   echo "FAIL: .env file is tracked by git" >&2; fail=1
 fi
 
-# 3. The static dashboard must not contain server-side config names or values.
-if [ -d frontend/dist ]; then
-  if grep -rEl 'ANTHROPIC_API_KEY|DATABASE_URL|x-api-key|sk-ant-|postgres://' frontend/dist; then
-    echo "FAIL: server-side configuration referenced in frontend bundle" >&2; fail=1
+# 3. Browser assets (frontend/dist/client) must not contain server-side config
+#    names or values, including the portal's own server-only API_ORIGIN.
+#    The portal's server bundle (dist/server) must not contain secret values.
+if [ -d frontend/dist/client ]; then
+  if grep -rEl 'ANTHROPIC_API_KEY|DATABASE_URL|API_ORIGIN|API_TIMEOUT_MS|x-api-key|sk-ant-|postgres://|127\.0\.0\.1:8080' frontend/dist/client; then
+    echo "FAIL: server-side configuration referenced in browser assets" >&2; fail=1
+  fi
+  if grep -rEl 'ANTHROPIC_API_KEY|DATABASE_URL|sk-ant-|postgres://' frontend/dist/server; then
+    echo "FAIL: backend secrets referenced in the portal server bundle" >&2; fail=1
   fi
 else
   echo "note: frontend/dist not built; skipping bundle check"

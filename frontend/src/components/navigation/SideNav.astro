@@ -1,0 +1,129 @@
+---
+// Primary navigation. Lists only implemented pages.
+import Icon, { type IconName } from "../ui/Icon.astro";
+
+export type NavKey = "dashboard" | "workflows";
+
+interface Props {
+  active?: NavKey;
+}
+const { active } = Astro.props;
+const items: { key: NavKey; href: string; label: string; icon: IconName }[] = [
+  { key: "dashboard", href: "/", label: "Dashboard", icon: "home" },
+  { key: "workflows", href: "/workflows", label: "Workflows", icon: "list" },
+];
+---
+
+<header class="nav">
+  <a class="nav__brand" href="/">
+    <svg class="nav__mark" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect width="24" height="24" rx="6" fill="currentColor"></rect>
+      <path d="M8 12h8" stroke="#fff" stroke-width="1.75" stroke-linecap="round"></path>
+      <circle cx="7.5" cy="12" r="2.5" fill="#fff"></circle>
+      <circle cx="16.5" cy="12" r="2.5" fill="#fff"></circle>
+    </svg>
+    <span class="nav__name">A2A Review</span>
+  </a>
+  <nav class="nav__links" aria-label="Main">
+    {
+      items.map((item) => (
+        <a class="nav__link" href={item.href} aria-current={active === item.key ? "page" : undefined}>
+          <Icon name={item.icon} size={16} />
+          {item.label}
+        </a>
+      ))
+    }
+  </nav>
+  <p class="nav__note">
+    Worker → Reviewer over the Agent2Agent protocol. Agent output is displayed as text and never executed.
+  </p>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    height: 100vh;
+    padding: var(--space-4) var(--space-3);
+  }
+  .nav__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    color: var(--color-text);
+    text-decoration: none;
+    font-weight: var(--weight-semibold);
+    border-radius: var(--radius-sm);
+  }
+  .nav__mark {
+    color: var(--color-accent);
+    flex: none;
+  }
+  .nav__links {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .nav__link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 36px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    font-weight: var(--weight-medium);
+  }
+  .nav__link:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+  .nav__link[aria-current="page"] {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent-text);
+  }
+  .nav__note {
+    margin-top: auto;
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--color-text-secondary);
+  }
+  @media (max-width: 900px) {
+    .nav {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      height: auto;
+      position: static;
+      padding: var(--space-2) var(--space-4);
+    }
+    .nav__links {
+      flex-direction: row;
+      gap: var(--space-1);
+    }
+    .nav__link {
+      min-height: 40px;
+      padding: 0 var(--space-3);
+    }
+    .nav__note {
+      display: none;
+    }
+  }
+  /* Very narrow screens: icon only, but the link keeps its accessible name. */
+  @media (max-width: 380px) {
+    .nav__name {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+  }
+</style>

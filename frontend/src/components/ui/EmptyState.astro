@@ -1,0 +1,68 @@
+---
+// Explains why a region is empty and what to do next.
+import Icon, { type IconName } from "./Icon.astro";
+
+interface Props {
+  title: string;
+  description?: string;
+  icon?: IconName;
+  compact?: boolean;
+}
+const { title, description, icon = "circle-dashed", compact = false } = Astro.props;
+---
+
+<div class:list={["empty", compact && "empty--compact"]}>
+  <span class="empty__icon"><Icon name={icon} size={compact ? 18 : 20} /></span>
+  <p class="empty__title">{title}</p>
+  {description && <p class="empty__description">{description}</p>}
+  {
+    Astro.slots.has("default") && (
+      <div class="empty__actions">
+        <slot />
+      </div>
+    )
+  }
+</div>
+
+<style>
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: var(--space-7) var(--space-5);
+  }
+  .empty--compact {
+    padding: var(--space-5) var(--space-4);
+  }
+  .empty__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-full);
+    background: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    margin-bottom: var(--space-3);
+  }
+  .empty--compact .empty__icon {
+    width: 32px;
+    height: 32px;
+    margin-bottom: var(--space-2);
+  }
+  .empty__title {
+    font-weight: var(--weight-semibold);
+  }
+  .empty__description {
+    margin-top: var(--space-1);
+    max-width: 44ch;
+    color: var(--color-text-secondary);
+  }
+  .empty__actions {
+    margin-top: var(--space-4);
+    display: flex;
+    gap: var(--space-2);
+  }
+</style>

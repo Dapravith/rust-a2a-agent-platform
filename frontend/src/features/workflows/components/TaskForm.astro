@@ -1,0 +1,172 @@
+---
+// Task submission form. Works as a plain HTML form POST (handled by
+// src/pages/index.astro); src/scripts/task-form.ts adds instant validation,
+// a live character count and duplicate-submit protection.
+import Button from "../../../components/ui/Button.astro";
+import Callout from "../../../components/ui/Callout.astro";
+import type { Tone } from "../present.ts";
+
+export interface FormNotice {
+  tone: Tone;
+  title: string;
+  detail: string;
+  link?: { href: string; label: string };
+}
+
+interface Props {
+  idempotencyKey: string;
+  value?: string;
+  fieldError?: string;
+  notice?: FormNotice;
+}
+const { idempotencyKey, value = "", fieldError, notice } = Astro.props;
+const MAX = 4000;
+const count = Array.from(value).length;
+const describedBy = ["question-hint", "question-count", fieldError ? "question-error" : null].filter(Boolean).join(" ");
+---
+
+<form class="task-form" method="post" action="/" novalidate data-task-form data-max={MAX}>
+  <input type="hidden" name="idempotency_key" value={idempotencyKey} data-idempotency-key />
+
+  <div class="field">
+    <label class="field__label" for="question">Software engineering question</label>
+    <p class="field__hint" id="question-hint">
+      Ask one focused question. Between 10 and 4,000 characters; plain text or Markdown.
+    </p>
+    <textarea
+      class="field__control"
+      id="question"
+      name="question"
+      rows="7"
+      maxlength={MAX}
+      required
+      spellcheck="true"
+      placeholder="e.g. Propose validation rules for a Rust API that creates crowdfunding campaigns."
+      aria-describedby={describedBy}
+      aria-invalid={fieldError ? "true" : undefined}
+      autofocus={fieldError ? true : undefined}>{value}</textarea
+    >
+    <div class="field__footer">
+      <p class="field__error" id="question-error" data-field-error hidden={!fieldError}>{fieldError}</p>
+      <span class="field__count" id="question-count" data-count>{count.toLocaleString("en-US")} / {MAX.toLocaleString("en-US")}</span>
+    </div>
+  </div>
+
+  {
+    notice && (
+      <Callout tone={notice.tone} title={notice.title} role={notice.tone === "error" ? "alert" : "status"} id="form-notice" autofocus={notice.tone === "error" && !fieldError}>
+        <p>{notice.detail}</p>
+        {notice.link && (
+          <p>
+            <a href={notice.link.href}>{notice.link.label}</a>
+          </p>
+        )}
+      </Callout>
+    )
+  }
+
+  <div class="task-form__actions">
+    <p class="task-form__note">Nothing is executed or changed. Results are text only.</p>
+    <Button variant="primary" type="submit" icon="send" data-submit>Run workflow</Button>
+  </div>
+  <p class="sr-only" role="status" aria-live="polite" data-form-status></p>
+</form>
+
+<style>
+  .task-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+  }
+  .field__label {
+    font-weight: var(--weight-semibold);
+  }
+  .field__hint {
+    margin-top: 2px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+  .field__control {
+    margin-top: var(--space-2);
+    width: 100%;
+    min-height: 168px;
+    padding: var(--space-3);
+    resize: vertical;
+    font: inherit;
+    font-size: var(--text-lg);
+    line-height: var(--leading-normal);
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--duration-fast) var(--ease);
+  }
+  .field__control::placeholder {
+    color: var(--color-text-placeholder);
+  }
+  .field__control:hover {
+    border-color: var(--color-text-disabled);
+  }
+  .field__control:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 0;
+    border-color: var(--color-accent);
+  }
+  .field__control[aria-invalid="true"] {
+    border-color: var(--color-error-fg);
+  }
+  .field__control[aria-invalid="true"]:focus-visible {
+    outline-color: var(--color-error-fg);
+  }
+  .field__footer {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    min-height: 20px;
+  }
+  .field__error {
+    color: var(--color-error-text);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .field__error[hidden] {
+    display: none;
+  }
+  .field__count {
+    margin-left: auto;
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .field__count[data-state="limit"] {
+    color: var(--color-warning-text);
+  }
+  .task-form__actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .task-form__note {
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+  @media (max-width: 640px) {
+    .task-form__actions {
+      flex-direction: column-reverse;
+      align-items: stretch;
+    }
+  }
+</style>
+
+<script>
+  import "../../../scripts/task-form.ts";
+</script>

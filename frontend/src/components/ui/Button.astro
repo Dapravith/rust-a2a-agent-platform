@@ -1,0 +1,106 @@
+---
+// Button or link styled as a button. `href` renders an <a>; otherwise a <button>.
+import type { HTMLAttributes } from "astro/types";
+import Icon, { type IconName } from "./Icon.astro";
+
+type Props = Omit<HTMLAttributes<"button">, "type"> & {
+  variant?: "primary" | "secondary" | "ghost";
+  size?: "md" | "sm";
+  type?: "button" | "submit";
+  href?: string;
+  icon?: IconName;
+  iconEnd?: IconName;
+};
+
+const { variant = "secondary", size = "md", type = "button", href, icon, iconEnd, class: className, ...rest } =
+  Astro.props;
+const classes = ["btn", `btn--${variant}`, `btn--${size}`, className];
+const iconSize = size === "sm" ? 14 : 16;
+---
+
+{
+  href ? (
+    <a class:list={classes} href={href} {...(rest as HTMLAttributes<"a">)}>
+      {icon && <Icon name={icon} size={iconSize} />}
+      <span class="btn__label"><slot /></span>
+      {iconEnd && <Icon name={iconEnd} size={iconSize} />}
+    </a>
+  ) : (
+    <button class:list={classes} type={type} {...rest}>
+      {icon && <Icon name={icon} size={iconSize} />}
+      <span class="btn__label"><slot /></span>
+      {iconEnd && <Icon name={iconEnd} size={iconSize} />}
+    </button>
+  )
+}
+
+<style>
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: var(--control-height);
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    font: inherit;
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) var(--ease),
+      border-color var(--duration-fast) var(--ease),
+      color var(--duration-fast) var(--ease);
+  }
+  .btn--sm {
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    gap: 6px;
+  }
+  .btn--primary {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    box-shadow: var(--shadow-sm);
+  }
+  .btn--primary:hover {
+    background: var(--color-accent-hover);
+  }
+  .btn--secondary {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-color: var(--color-border-strong);
+    box-shadow: var(--shadow-sm);
+  }
+  .btn--secondary:hover {
+    background: var(--color-surface-hover);
+  }
+  .btn--ghost {
+    background: transparent;
+    color: var(--color-text-secondary);
+  }
+  .btn--ghost:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    cursor: not-allowed;
+    background: var(--color-surface-subtle);
+    border-color: var(--color-border);
+    color: var(--color-text-disabled);
+    box-shadow: none;
+  }
+  /* Submitting: keep the primary look so progress reads as progress, not as "disabled". */
+  .btn--primary[aria-busy="true"] {
+    background: var(--color-accent);
+    border-color: transparent;
+    color: var(--color-on-accent);
+    cursor: progress;
+    opacity: 0.85;
+  }
+</style>

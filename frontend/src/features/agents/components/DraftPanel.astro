@@ -1,0 +1,87 @@
+---
+// Worker result: title, summary, Markdown body (rendered safely on the
+// server) and assumptions. Raw Markdown is available through Copy.
+import Card from "../../../components/ui/Card.astro";
+import CopyButton from "../../../components/ui/CopyButton.astro";
+import EmptyState from "../../../components/ui/EmptyState.astro";
+import { renderMarkdown } from "../../../lib/markdown.ts";
+import type { Draft, WorkflowStatus } from "../../workflows/schemas.ts";
+
+interface Props {
+  draft: Draft | null;
+  status: WorkflowStatus;
+  /** True while the Worker run is in progress. */
+  working: boolean;
+}
+const { draft, status, working } = Astro.props;
+---
+
+<Card title="Worker draft" id="draft" icon="file-text">
+  <Fragment slot="actions">{draft && <CopyButton target="draft-source" label="Copy Markdown" />}</Fragment>
+  {
+    draft ? (
+      <article class="draft">
+        <h3 class="draft__title">{draft.title}</h3>
+        <p class="draft__summary">{draft.summary}</p>
+        <div class="prose draft__content" set:html={renderMarkdown(draft.content)} />
+        <pre id="draft-source" hidden>{draft.content}</pre>
+        {draft.assumptions.length > 0 && (
+          <section class="draft__assumptions" aria-labelledby="assumptions-title">
+            <h4 id="assumptions-title">Assumptions</h4>
+            <ul>
+              {draft.assumptions.map((a) => (
+                <li>{a}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </article>
+    ) : working ? (
+      <EmptyState compact icon="loader" title="The Worker is drafting an answer" description="The draft appears here as soon as the Worker agent returns it." />
+    ) : status === "queued" ? (
+      <EmptyState compact icon="clock" title="Waiting to start" description="The Worker starts once the orchestrator picks up this workflow." />
+    ) : (
+      <EmptyState compact icon="circle-dashed" title="No draft was produced" description="The workflow stopped before the Worker returned a draft." />
+    )
+  }
+</Card>
+
+<style>
+  .draft__title {
+    font-size: var(--text-xl);
+    overflow-wrap: anywhere;
+  }
+  .draft__summary {
+    margin-top: var(--space-2);
+    color: var(--color-text-secondary);
+    font-size: var(--text-lg);
+    line-height: var(--leading-relaxed);
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+  }
+  .draft__content {
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border);
+  }
+  .draft__assumptions {
+    margin-top: var(--space-5);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+  }
+  .draft__assumptions h4 {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    font-weight: var(--weight-semibold);
+  }
+  .draft__assumptions ul {
+    margin-top: var(--space-2);
+    padding-left: var(--space-5);
+    overflow-wrap: anywhere;
+  }
+  .draft__assumptions li + li {
+    margin-top: var(--space-1);
+  }
+</style>
