@@ -620,9 +620,177 @@ async fn untrusted_card_is_refused(pool: PgPool) {
     expect_worker_failure(pool, w, SECS_5, "untrusted agent card").await;
 }
 
+/// Serves `body` (or a 404 when `None`) at the Agent Card path.
+async fn card_server(body: Option<Value>) -> String {
+    let (l, url) = bind().await;
+    let router = match body {
+        Some(b) => axum::Router::new().route(
+            "/.well-known/agent-card.json",
+            axum::routing::get(move || async move { axum::Json(b) }),
+        ),
+        None => axum::Router::new(),
+    };
+    serve(router, l).await;
+    url
+}
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn malformed_agent_card_is_invalid_not_unreachable(pool: PgPool) {
+    let w = card_server(Some(json!({"hello": "not an agent card"}))).await;
+    expect_worker_failure(pool, w, SECS_5, "invalid agent card").await;
+}
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn missing_agent_card_is_invalid(pool: PgPool) {
+    let w = card_server(None).await;
+    expect_worker_failure(pool, w, SECS_5, "invalid agent card").await;
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer-stage failures: the Worker draft must be preserved
+// ---------------------------------------------------------------------------
+
+async fn expect_reviewer_failure(pool: PgPool, reviewer: String, needle: &str) {
+    let w = real_worker().await;
+    let wf = harness(pool, &w, &reviewer, SECS_5).await.run().await;
+    assert_eq!(wf["status"], "failed", "{wf}");
+    let err = wf["error"].as_str().unwrap();
+    assert!(err.starts_with("reviewer: "), "{err}");
+    assert!(
+        err.contains(needle),
+        "error `{err}` should contain `{needle}`"
+    );
+    assert_no_internals(err);
+    let runs = wf["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{wf}");
+    assert_eq!(runs[0]["agent"], "worker");
+    assert_eq!(runs[0]["status"], "completed");
+    assert_eq!(runs[1]["agent"], "reviewer");
+    assert_eq!(runs[1]["status"], "failed");
+    // The Worker's draft survives a Reviewer failure; no review is invented.
+    assert!(wf["draft"]["title"].as_str().unwrap().starts_with("Draft:"));
+    assert!(wf["review"].is_null());
+    assert!(wf["verdict"].is_null());
+}
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn reviewer_unavailable_preserves_draft(pool: PgPool) {
+    let (l, url) = bind().await;
+    drop(l);
+    expect_reviewer_failure(pool, url, "unreachable").await;
+}
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn malformed_review_preserves_draft(pool: PgPool) {
+    let bad: Script = Arc::new(|t, c| {
+        vec![
+            artifact_ev(
+                t,
+                c,
+                "review",
+                json!({"verdict": "maybe", "summary": "s", "findings": []}),
+            ),
+            status_ev(t, c, TaskState::Completed, None),
+        ]
+    });
+    let r = fake_agent("Draft Reviewer", Duration::ZERO, bad).await;
+    expect_reviewer_failure(pool, r, "invalid artifact").await;
+}
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn reviewer_auth_required_is_unsupported(pool: PgPool) {
+    let auth: Script =
+        Arc::new(|t, c| vec![status_ev(t, c, TaskState::AuthRequired, Some("log in"))]);
+    let r = fake_agent("Draft Reviewer", Duration::ZERO, auth).await;
+    expect_reviewer_failure(pool, r, "unsupported interaction").await;
+}
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn reviewer_timeout_preserves_draft(pool: PgPool) {
+    let never: Script = Arc::new(|t, c| vec![status_ev(t, c, TaskState::Completed, None)]);
+    let r = fake_agent("Draft Reviewer", Duration::from_secs(10), never).await;
+    let w = real_worker().await;
+    let wf = harness(pool, &w, &r, Duration::from_millis(500))
+        .await
+        .run()
+        .await;
+    assert_eq!(wf["status"], "failed", "{wf}");
+    assert!(
+        wf["error"].as_str().unwrap().contains("did not finish"),
+        "{wf}"
+    );
+    assert_eq!(wf["runs"][1]["status"], "failed");
+    assert!(wf["draft"].is_object() && wf["review"].is_null());
+}
+
 // ---------------------------------------------------------------------------
 // HTTP validation
 // ---------------------------------------------------------------------------
+
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn versioned_paths_and_liveness(pool: PgPool) {
+    let (w, r) = (real_worker().await, real_reviewer().await);
+    let h = harness(pool, &w, &r, SECS_5).await;
+
+    let live = h
+        .http
+        .get(format!("{}/healthz", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(live.status(), 200);
+    assert_eq!(live.json::<Value>().await.unwrap()["status"], "ok");
+
+    let resp = h
+        .http
+        .post(format!("{}/api/v1/workflows", h.base))
+        .json(&json!({ "question": QUESTION }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202);
+    let id = resp.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut wf = Value::Null;
+    for _ in 0..300 {
+        wf = h
+            .http
+            .get(format!("{}/api/v1/workflows/{id}", h.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if wf["status"] == "completed" || wf["status"] == "failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(wf["status"], "completed", "{wf}");
+    assert!(wf["draft"].is_object() && wf["review"].is_object());
+
+    let bad = h
+        .http
+        .post(format!("{}/api/v1/workflows", h.base))
+        .json(&json!({"question": "short"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 422);
+    let body: Value = bad.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "validation_failed");
+
+    let missing = h
+        .http
+        .get(format!("{}/api/v1/nope", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
 
 #[sqlx::test(migrator = "api::db::MIGRATOR")]
 async fn api_input_validation(pool: PgPool) {

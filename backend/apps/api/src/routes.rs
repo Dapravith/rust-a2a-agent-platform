@@ -225,7 +225,17 @@ pub fn router(engine: Engine) -> Router {
             HeaderValue::from_static("no-store"),
         ))
         .with_state(engine);
-    Router::new().nest("/api", api)
+    // `/api/v1` is the versioned path; `/api` stays for the dashboard. Both
+    // mount the same handlers. `/healthz` is process liveness only (no DB),
+    // while `/api/health` is readiness and reports the database.
+    Router::new()
+        .route("/healthz", get(liveness))
+        .nest("/api/v1", api.clone())
+        .nest("/api", api)
+}
+
+async fn liveness() -> Json<Value> {
+    Json(json!({"status": "ok"}))
 }
 
 /// Security headers, limits, timeouts and request tracing. Applied last, so

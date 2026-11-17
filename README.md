@@ -7,7 +7,8 @@ Worker → Reviewer sequence and persists everything to Postgres (Supabase-compa
 An Astro dashboard submits questions and shows history and results.
 
 Source of truth: [`A2A_PRD.md`](A2A_PRD.md) · Decision record: [`docs/ADR.md`](docs/ADR.md) ·
-Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · P1 plan (not implemented): [`docs/P1_PLAN.md`](docs/P1_PLAN.md)
+Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · P1 plan (not implemented): [`docs/P1_PLAN.md`](docs/P1_PLAN.md) ·
+Phase 2 verification: [`docs/PHASE2.md`](docs/PHASE2.md)
 
 ```mermaid
 flowchart LR
@@ -102,9 +103,12 @@ reduce concurrent test databases with `cargo test --workspace -- --test-threads=
 
 ## REST API (`backend/apps/api`)
 
+Every `/api/...` route is also served under the versioned prefix `/api/v1/...` (same handlers).
+
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/api/health` | `200 {status, database}` or `503` |
+| `GET` | `/healthz` | `200 {status}`: process liveness only (no database check) |
+| `GET` | `/api/health` | Readiness: `200 {status, database}` or `503` |
 | `GET` | `/api/agents` | Discovery status of both agents (from their Agent Cards) |
 | `POST` | `/api/workflows` `{question}` (+ optional `Idempotency-Key`) | `202` new · `200` same key replayed · `409` another workflow active · `413` · `422` |
 | `GET` | `/api/workflows?limit=&before=` | Newest first, cursor pagination |
