@@ -1,7 +1,6 @@
 use std::process::ExitCode;
 
-use api::{app, config::Config, db, engine::Engine};
-use sqlx::postgres::PgPoolOptions;
+use api::{app, config, config::Config, db, engine::Engine};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -15,7 +14,14 @@ async fn main() -> ExitCode {
         builder.init();
     }
 
-    match run().await {
+    let result = match std::env::args().nth(1).as_deref() {
+        None | Some("serve") => serve().await,
+        Some("migrate") => migrate().await,
+        Some(other) => Err(format!(
+            "unknown command `{other}`; use `serve` (default) or `migrate`"
+        )),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!(error = %e, "api failed");
@@ -24,20 +30,30 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run() -> Result<(), String> {
-    let cfg = Config::from_env()?;
-    tracing::info!(config = ?cfg, "starting api");
-
-    let pool = PgPoolOptions::new()
-        .max_connections(cfg.db_max_connections)
-        .acquire_timeout(std::time::Duration::from_secs(10))
-        .connect(&cfg.database_url)
-        .await
-        .map_err(|e| format!("cannot connect to database: {e}"))?;
+async fn migrate() -> Result<(), String> {
+    let url = config::migration_database_url()?;
+    let pool = db::connect(&url, 1).await?;
     db::MIGRATOR
         .run(&pool)
         .await
         .map_err(|e| format!("migrations failed: {e}"))?;
+    db::verify_schema(&pool).await?;
+    tracing::info!(
+        migrations = db::MIGRATOR.iter().count(),
+        "database schema is up to date"
+    );
+    Ok(())
+}
+
+async fn serve() -> Result<(), String> {
+    let cfg = Config::from_env()?;
+    tracing::info!(config = ?cfg, "starting api");
+
+    let pool = db::connect(&cfg.database_url, cfg.db_max_connections).await?;
+    db::verify_schema(&pool).await?;
+    // Held until the process exits: recovery below is only safe when no
+    // other orchestrator is running against this database.
+    let _instance = db::InstanceLock::acquire(&pool).await?;
 
     let recovered = db::recover_interrupted(&pool)
         .await

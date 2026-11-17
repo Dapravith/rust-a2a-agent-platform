@@ -5,6 +5,7 @@
 
 use a2a::{AgentCard, AgentSkill};
 use agent_runtime::{LlmClient, Skill, agent_card};
+use contracts::AgentFailure;
 use contracts::{
     Finding, REVIEW_ARTIFACT_NAME, REVIEWER_AGENT_NAME, REVIEWER_SKILL_ID, ReviewArtifact,
     ReviewerRequest, Severity, Verdict,
@@ -124,15 +125,16 @@ impl Skill for Reviewer {
         }
     }
 
-    async fn run(&self, input: ReviewerRequest) -> Result<ReviewArtifact, String> {
+    async fn run(&self, input: ReviewerRequest) -> Result<ReviewArtifact, AgentFailure> {
         match &self.llm {
             None => Ok(mock_review(&input)),
             Some(llm) => {
-                let payload = serde_json::to_string_pretty(&input).map_err(|e| e.to_string())?;
+                let payload = serde_json::to_string_pretty(&input)
+                    .map_err(|e| AgentFailure::internal(e.to_string()))?;
                 let user = format!("<review_input>\n{payload}\n</review_input>");
                 llm.generate(SYSTEM_PROMPT, &user, review_schema())
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(agent_runtime::LlmError::into_failure)
             }
         }
     }

@@ -5,6 +5,7 @@ pub mod a2a;
 pub mod config;
 pub mod db;
 pub mod engine;
+pub mod error_code;
 pub mod routes;
 
 use axum::Router;

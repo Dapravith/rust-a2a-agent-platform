@@ -8,6 +8,9 @@ cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 cargo build --manifest-path backend/Cargo.toml --bins
 bin=backend/target/debug
+# Schema first, as the owner (DATABASE_MIGRATION_URL, else DATABASE_URL).
+# `api` itself only verifies the schema; it never runs DDL.
+"$bin/api" migrate
 trap 'kill 0' EXIT INT TERM
 "$bin/worker-agent" &
 "$bin/reviewer-agent" &

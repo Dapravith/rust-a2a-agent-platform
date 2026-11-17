@@ -4,6 +4,7 @@
 
 use a2a::{AgentCard, AgentSkill};
 use agent_runtime::{LlmClient, Skill, agent_card};
+use contracts::AgentFailure;
 use contracts::{
     DRAFT_ARTIFACT_NAME, DraftArtifact, WORKER_AGENT_NAME, WORKER_SKILL_ID, WorkerRequest,
 };
@@ -108,15 +109,16 @@ impl Skill for Drafter {
         }
     }
 
-    async fn run(&self, input: WorkerRequest) -> Result<DraftArtifact, String> {
+    async fn run(&self, input: WorkerRequest) -> Result<DraftArtifact, AgentFailure> {
         match &self.llm {
             None => Ok(mock_draft(&input)),
             Some(llm) => {
-                let question = serde_json::to_string(&input.question).map_err(|e| e.to_string())?;
+                let question = serde_json::to_string(&input.question)
+                    .map_err(|e| AgentFailure::internal(e.to_string()))?;
                 let user = format!("<question>\n{question}\n</question>");
                 llm.generate(SYSTEM_PROMPT, &user, draft_schema())
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(agent_runtime::LlmError::into_failure)
             }
         }
     }

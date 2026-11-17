@@ -9,7 +9,7 @@
 | Worker agent (`backend/apps/worker-agent`) | One skill: `draft-answer` | Call the Reviewer, access the DB |
 | Reviewer agent (`backend/apps/reviewer-agent`) | One skill: `review-draft` | Call the Worker, access the DB |
 | Agent runtime (`backend/crates/agent-runtime`) | SDK server wiring for one `Skill` per agent; the single LLM provider client | Business logic of either agent |
-| Postgres (`backend/migrations`) | `workflows`, `agent_runs`, `artifacts` | Be reachable from the browser (RLS enabled, no policies) |
+| Postgres (`backend/migrations`) | `workflows`, `agent_runs`, `artifacts`; runtime role `a2a_app` | Be reachable from the browser (RLS on; policies only for `a2a_app`; Supabase `anon`/`authenticated` revoked) |
 
 A2A transport: official SDK [`a2aproject/a2a-rs`](https://github.com/a2aproject/a2a-rs)
 (`a2a-lf 0.4.2`, `a2a-server-lf 0.5.3`, `a2a-client-lf 0.2.9`, pinned exactly), JSON-RPC 2.0 over HTTP.
@@ -65,14 +65,22 @@ decoded with unknown fields rejected and validated (`backend/crates/contracts`).
 | Orchestrator → Reviewer | `{ "question", "draft": Draft }` |
 | Reviewer → Orchestrator (artifact `review`) | `{ "verdict": "pass" \| "needs_changes", "summary", "findings": [{ "severity": "low"\|"medium"\|"high", "title", "detail" }] ≤ 30 }`; `needs_changes` requires ≥ 1 finding |
 
-Invalid agent input → task `rejected`; inference failure → task `failed` with a status message.
+Invalid agent input → task `rejected`; inference failure → task `failed` whose status message has a
+text part (`"<code>: <reason>"`) and a data part `{ "code", "message" }` with `code` from a closed set
+(`llm_timeout`, `llm_rate_limited`, `llm_provider_error`, `llm_unavailable`, `llm_refused`,
+`llm_output_truncated`, `llm_output_invalid`, `internal`). The orchestrator maps it to a stored
+`error_code`; an unknown code is ignored (`agent_failed`), and it never authorizes anything.
 
 ## Reliability and security decisions
 
 | Concern | Decision |
 |---|---|
 | Duplicate execution | DB partial unique index (`workflows_single_active`) → `409`; optional `Idempotency-Key` returns the existing workflow for the same question, `422 idempotency_key_mismatch` for a different one |
-| Restart recovery | At startup, `queued`/`running` rows are marked `failed` ("Interrupted by an orchestrator restart"). No silent re-execution, so no duplicate LLM spend |
+| Restart recovery | At startup, `queued`/`running` rows are marked `failed` with `error_code = interrupted` and the `failed_stage` of the run that was in flight. No silent re-execution, so no duplicate LLM spend. Safe only with one orchestrator per database, enforced by a session advisory lock (a second `api` refuses to start) |
+| Duplicate completion | Every transition is `UPDATE … WHERE status = <expected>` with the affected-row count checked; a second completion/failure is refused (`InvalidTransition`) and logged, never written |
+| Schema ownership | `api migrate` (owner, `DATABASE_MIGRATION_URL`) applies migrations; `api serve` connects as a member of `a2a_app` (SELECT/INSERT/UPDATE only) and verifies the migration history (missing, failed, modified or unknown migrations → refuse to start) |
+| Database TLS | Any non-loopback `DATABASE_URL` must use `sslmode=verify-full` (chain + hostname); checked before connecting |
+| LLM provider | Typed request/response; body capped at 1 MiB; retries only when the request was certainly not processed (connect failure, 429, 503, 529; `retry-after` honoured, capped) within `LLM_DEADLINE_SECS`; read timeouts and other 5xx are reported, not retried; API key sent as a sensitive header, redacted from `Debug` and from any provider text |
 | Crash safety | Each workflow runs in a supervised task; a panic is recorded as `failed` |
 | Timeouts | One deadline per agent call (`AGENT_TIMEOUT_SECS`, default 240 s) covering send + polling; HTTP socket timeout sits 5 s above it. On the deadline the API sends `CancelTask`; the agent's executor aborts the in-flight work (the SDK alone only marks the task canceled). Agents bound LLM retries with `LLM_DEADLINE_SECS` (default 200 s, keep below `AGENT_TIMEOUT_SECS`) |
 | Error exposure | Errors stored on workflows/runs are client-visible, so they carry only a category (`internal error…`, `agent unreachable…`) with URLs redacted; full details go to the server logs |
