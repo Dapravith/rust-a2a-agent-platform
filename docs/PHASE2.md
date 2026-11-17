@@ -27,6 +27,8 @@ The Phase 2 brief conflicted with the PRD (source of truth) on three points. The
 | `GET /healthz` liveness (no DB); `/api/v1` prefix mounted on the existing handlers | `backend/apps/api/src/routes.rs` |
 | Typed `InvalidCard` error: a reachable agent with a missing or malformed card is no longer reported as "unreachable" | `backend/apps/api/src/a2a.rs` |
 | **Defect fix:** agents accepted 10 MiB bodies, not the intended 256 KiB (the SDK's inner `DefaultBodyLimit` overrode ours). Now enforced with `RequestBodyLimitLayer` | `backend/crates/agent-runtime/src/server.rs`, `Cargo.toml` |
+| **Defect fix (found by TCK):** `POST /jsonrpc/` (trailing slash) returned an empty 404, so clients that join the advertised URL with `/` could not reach the agents | `backend/crates/agent-runtime/src/server.rs` |
+| **Defect fix (found by TCK):** cards declared `streaming: false`, yet `SendStreamingMessage` was served over SSE. The handler now receives the card's capabilities (`with_capabilities`), and `extendedAgentCard: false` is explicit, so both return `-32004` | `backend/crates/agent-runtime/src/server.rs` |
 | Tests: Reviewer unavailable / malformed review / `auth-required` / timeout (each asserts the Worker draft is preserved), malformed and missing Agent Card, `/api/v1` + `/healthz`, Reviewer oversized input and body, draft prompt-injection treated as data | `backend/apps/api/tests/workflow.rs`, `backend/apps/reviewer-agent/tests/a2a.rs` |
 
 ## Automated verification
@@ -39,7 +41,7 @@ cargo build --workspace --locked
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54329/a2a cargo test --workspace --locked -- --test-threads=4
 ```
 
-Result: all clean; **55 passed, 0 failed** (25 orchestrator end-to-end tests over real HTTP with
+Result: all clean; **57 passed, 0 failed** (25 orchestrator end-to-end tests over real HTTP with
 real SDK servers/clients and a real Postgres database per test).
 
 ## Live verification (three separate processes)
@@ -58,4 +60,32 @@ Each binary was started on its own (`worker-agent`, `reviewer-agent`, `api`) wit
 | `question: "short"` | HTTP 422 `validation_failed` |
 | Reviewer process killed, then submit | `failed`, error `reviewer: agent unreachable … (<agent-url>)`, Worker draft preserved, no review |
 
-<!-- TCK section appended below -->
+## Official A2A TCK
+
+[`a2aproject/a2a-tck`](https://github.com/a2aproject/a2a-tck) at `104a7b4`, `run_tck.py --transport jsonrpc`,
+against each live agent.
+
+| Run | Worker | Reviewer |
+|---|---|---|
+| Before fixes | 20 passed, 50 failed, 6 errors | (same pattern) |
+| After trailing-slash fix | 56 passed, 9 failed | 56 passed, 9 failed |
+| After capability fix (final) | **58 passed, 6 failed**, 199 skipped | **58 passed, 6 failed**, 199 skipped |
+
+Remaining failures (identical on both agents):
+
+| Check | Cause | Assessment |
+|---|---|---|
+| 4 × `test_task_has_{text,file,file_url,data}_artifact`, `test_returns_message_with_text_part` | TCK sends plain-text scenario prompts written for its generated reference agent; our agents accept only their JSON data contract and correctly return `TASK_STATE_REJECTED` | By design (domain agents, not a generic SUT) |
+| CORE-ERR-002: `SendMessage` with `params: {}` must be a JSON-RPC error | The SDK server's JSON-RPC decoding (`a2a-server-lf 0.5.3`) accepts the missing `message` and creates a task; our skill then rejects it, so no work runs | Upstream SDK gap; not patched locally (would require custom wire handling) |
+
+TCK summary score: 69.9% automated overall (MUST 69.2%). The TCK counts its skipped,
+scenario-dependent MUST checks as not tested, and nine requirements (card signing, TLS, server
+auth) need manual verification. TLS and agent auth are out of scope for local P0 (see `P1_PLAN.md`).
+
+## Known limitations
+
+- Agents rely on loopback binding for access control; no authentication between orchestrator and
+  agents yet (planned in `P1_PLAN.md`).
+- SDK `InMemoryTaskStore` keeps every agent task for the process lifetime (see `ARCHITECTURE.md`).
+- CORE-ERR-002 above, pending an SDK release.
+- Interrupted workflows are marked `failed` on API restart and never re-executed automatically.
