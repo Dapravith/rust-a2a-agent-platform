@@ -1,0 +1,63 @@
+---
+// App frame: sidebar navigation on wide screens, a compact top bar on narrow
+// ones (two links fit without a disclosure menu, so no JavaScript is needed).
+import BaseLayout from "./BaseLayout.astro";
+import SideNav, { type NavKey } from "../components/navigation/SideNav.astro";
+
+interface Props {
+  title: string;
+  active?: NavKey;
+  description?: string;
+}
+const { title, active, description } = Astro.props;
+---
+
+<BaseLayout title={title} description={description}>
+  <slot name="head" slot="head" />
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="frame">
+    <div class="frame__sidebar"><SideNav active={active} /></div>
+    <main id="main" class="frame__main" tabindex="-1">
+      <div class="frame__content">
+        <slot />
+      </div>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .frame {
+    display: grid;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    min-height: 100vh;
+  }
+  .frame__sidebar {
+    background: var(--color-surface);
+    border-right: 1px solid var(--color-border);
+  }
+  .frame__main {
+    min-width: 0;
+    outline: none;
+  }
+  .frame__content {
+    max-width: var(--content-max);
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-6) var(--space-7);
+  }
+  @media (max-width: 900px) {
+    .frame {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto 1fr;
+    }
+    .frame__sidebar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      border-right: 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .frame__content {
+      padding: var(--space-5) var(--space-4) var(--space-7);
+    }
+  }
+</style>

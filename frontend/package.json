@@ -11,13 +11,26 @@
     "dev": "astro dev",
     "check": "astro check",
     "build": "astro check && astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "start": "node dist/server/entry.mjs",
+    "test": "node --test tests/unit/*.test.ts",
+    "test:e2e": "astro build && playwright test"
   },
   "dependencies": {
-    "astro": "7.4.12"
+    "@astrojs/node": "11.1.9",
+    "astro": "7.4.12",
+    "markdown-it": "14.1.0"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.12",
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
+    "@types/markdown-it": "14.1.2",
+    "@types/pg": "8.23.1",
+    "pg": "8.23.1",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "playwright-core": "1.64.1"
   }
 }

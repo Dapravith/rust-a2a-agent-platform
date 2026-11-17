@@ -7,3 +7,7 @@ node_modules/
 frontend/dist/
 frontend/.astro/
 *.log
+
+# Playwright output
+frontend/test-results/
+frontend/playwright-report/

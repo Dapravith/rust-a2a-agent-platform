@@ -4,15 +4,17 @@ Two independent AI agents collaborate over the **Agent2Agent (A2A) protocol**: a
 **Worker** drafts an answer to a software-engineering question and a **Reviewer**
 independently evaluates it. A Rust/Axum **API** owns the deterministic
 Worker → Reviewer sequence and persists everything to Postgres (Supabase-compatible).
-An Astro dashboard submits questions and shows history and results.
+A server-rendered Astro portal submits questions and shows history, live progress and results.
 
 Source of truth: [`A2A_PRD.md`](A2A_PRD.md) · Decision record: [`docs/ADR.md`](docs/ADR.md) ·
 Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · P1 plan (not implemented): [`docs/P1_PLAN.md`](docs/P1_PLAN.md) ·
-Phase 2 verification: [`docs/PHASE2.md`](docs/PHASE2.md) · Phase 3 (persistence, LLM): [`docs/PHASE3.md`](docs/PHASE3.md)
+Phase 2 verification: [`docs/PHASE2.md`](docs/PHASE2.md) · Phase 3 (persistence, LLM): [`docs/PHASE3.md`](docs/PHASE3.md) ·
+Phase 4 (portal, UI/UX): [`docs/PHASE4.md`](docs/PHASE4.md)
 
 ```mermaid
 flowchart LR
-  B[Browser · Astro static UI] -->|same-origin /api| O[api :8080]
+  B[Browser] -->|HTML, forms| U[Astro SSR portal :4321]
+  U -->|REST /api, server-side| O[api :8080]
   O -->|Agent Card + JSON-RPC| W[worker-agent :9101]
   O -->|Agent Card + JSON-RPC| R[reviewer-agent :9102]
   W & R -->|reqwest| L[(Anthropic API or deterministic mock)]
@@ -23,7 +25,7 @@ flowchart LR
 
 ```text
 .
-├── frontend/                  Astro 7 + TypeScript dashboard (static build)
+├── frontend/                  Astro 7 + TypeScript portal (SSR, @astrojs/node); tests/unit, tests/e2e
 ├── backend/                   Rust Cargo workspace (Cargo.toml, Cargo.lock)
 │   ├── apps/
 │   │   ├── api/               Axum REST API, A2A client gateway, deterministic orchestration, SQLx
@@ -35,7 +37,8 @@ flowchart LR
 │   └── migrations/            SQLx migrations (embedded into `api`, applied by `api migrate`)
 ├── infrastructure/local/      compose.yaml for the local Postgres only (no deployment manifests in P0)
 ├── docs/                      ADR, architecture, P1 plan
-├── scripts/                   dev.sh (run all services), check-secrets.sh (credential exposure check)
+├── scripts/                   dev.sh (run all services), e2e-stack.sh (isolated stack for browser tests),
+│                              check-secrets.sh (credential exposure check)
 └── .github/workflows/ci.yml   fmt, clippy, tests with Postgres, Astro build, secret check
 ```
 
@@ -60,23 +63,26 @@ docker compose -f infrastructure/local/compose.yaml up -d
 cp .env.example .env
 ```
 
-3. Build the dashboard:
+3. Build the portal:
 
 ```bash
 (cd frontend && npm ci && npm run build)
 ```
 
-4. Build and run the two agents and the API (Ctrl+C stops all three):
+4. Build and run the two agents, the API and the portal (Ctrl+C stops all four):
 
 ```bash
 ./scripts/dev.sh
 ```
 
-5. Open <http://127.0.0.1:8080>. `dev.sh` runs `api migrate` first; `api` itself only verifies
-   the schema and refuses to start if it is out of date.
+5. Open <http://127.0.0.1:4321>. `dev.sh` runs `api migrate` first; `api` itself only verifies
+   the schema and refuses to start if it is out of date. The API (`:8080`) and agents only need to be
+   reachable by the portal, not by browsers.
 
 For frontend live-reload, keep `./scripts/dev.sh` running, then `cd frontend && npm run dev`
-(proxies `/api` to `:8080`) and open <http://localhost:4321>.
+(reads `API_ORIGIN`, default `http://127.0.0.1:8080`) and open <http://127.0.0.1:4321>
+(stop `dev.sh`'s portal first, or set `PORTAL_PORT`). Upgrading from Phase 3: remove `FRONTEND_DIR`
+from `.env` (`dev.sh` also unsets it).
 
 **Real LLM:** set `INFERENCE_MODE=anthropic` and `ANTHROPIC_API_KEY` in `.env` (read by the agents only).
 Mock mode needs no key; a provider failure is reported, never replaced by mock output.
@@ -98,7 +104,14 @@ cd backend && DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54329/a2a carg
 ```
 
 ```bash
-(cd frontend && npm run build) && ./scripts/check-secrets.sh
+(cd frontend && npm test && npm run build) && ./scripts/check-secrets.sh
+```
+
+Browser tests against the real stack (needs the local Postgres container and a Rust toolchain;
+starts its own isolated stack on ports 14321/18080/19101/19102 with a scratch `a2a_e2e` database):
+
+```bash
+cd frontend && npx playwright install chromium && npm run test:e2e
 ```
 
 Database tests use `#[sqlx::test]`, which creates and drops an isolated database per test.

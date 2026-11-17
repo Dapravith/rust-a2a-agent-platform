@@ -1,0 +1,70 @@
+---
+// Workflow detail: `GET /api/workflows/{id}`, server rendered. While the
+// workflow is queued or running, src/scripts/workflow-live.ts polls the
+// `./live` partial and swaps in fresh markup until a terminal state.
+import DashboardLayout from "../../../layouts/DashboardLayout.astro";
+import Button from "../../../components/ui/Button.astro";
+import Card from "../../../components/ui/Card.astro";
+import EmptyState from "../../../components/ui/EmptyState.astro";
+import ErrorState from "../../../components/ui/ErrorState.astro";
+import PageHeader from "../../../components/navigation/PageHeader.astro";
+import WorkflowDetailView from "../../../features/workflows/components/WorkflowDetailView.astro";
+import { api } from "../../../lib/config.ts";
+import { ApiError, describeLoadError } from "../../../lib/errors.ts";
+import { STATUS_LABEL } from "../../../features/workflows/present.ts";
+import { isWorkflowId } from "../../../features/workflows/api.ts";
+import { isActive, type WorkflowDetail } from "../../../features/workflows/schemas.ts";
+
+const id = Astro.params.id ?? "";
+let workflow: WorkflowDetail | null = null;
+let notFound = !isWorkflowId(id);
+let error: ReturnType<typeof describeLoadError> | null = null;
+
+if (!notFound) {
+  try {
+    workflow = await api.get(id);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) notFound = true;
+    else error = describeLoadError(e, "this workflow");
+  }
+}
+if (notFound) Astro.response.status = 404;
+else if (error) Astro.response.status = 503;
+
+const title = workflow ? `${STATUS_LABEL[workflow.status]} workflow` : notFound ? "Workflow not found" : "Workflow";
+---
+
+<DashboardLayout title={title} active="workflows">
+  {workflow && isActive(workflow.status) && <noscript slot="head"><meta http-equiv="refresh" content="5" /></noscript>}
+  {
+    workflow ? (
+      <WorkflowDetailView workflow={workflow} />
+    ) : notFound ? (
+      <>
+        <PageHeader title="Workflow not found" crumbs={[{ href: "/workflows", label: "Workflows" }]} />
+        <Card>
+          <EmptyState
+            icon="circle-dashed"
+            title="There is no workflow with this ID"
+            description="It may have been mistyped, or the link points to a different database."
+          >
+            <Button href="/workflows" icon="arrow-left">
+              All workflows
+            </Button>
+          </EmptyState>
+        </Card>
+      </>
+    ) : (
+      error && (
+        <>
+          <PageHeader title="Workflow" crumbs={[{ href: "/workflows", label: "Workflows" }]} />
+          <ErrorState title={error.title} detail={error.detail} />
+        </>
+      )
+    )
+  }
+</DashboardLayout>
+
+<script>
+  import "../../../scripts/workflow-live.ts";
+</script>

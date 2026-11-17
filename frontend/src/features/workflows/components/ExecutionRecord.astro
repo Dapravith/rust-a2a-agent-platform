@@ -1,0 +1,135 @@
+---
+// A2A agent runs as recorded by the orchestrator: status, A2A task state and
+// ids, timing and stable error codes. Diagnostic values are monospace.
+import Card from "../../../components/ui/Card.astro";
+import EmptyState from "../../../components/ui/EmptyState.astro";
+import StatusBadge from "../../../components/ui/StatusBadge.astro";
+import { formatDuration, formatUtc } from "../../../lib/format.ts";
+import { AGENT_LABEL } from "../present.ts";
+import type { AgentRun } from "../schemas.ts";
+
+interface Props {
+  runs: AgentRun[];
+}
+const { runs } = Astro.props;
+const TONE = { running: "info", completed: "success", failed: "error" } as const;
+const LABEL = { running: "Running", completed: "Completed", failed: "Failed" } as const;
+---
+
+<Card title="A2A execution" id="execution" description="Agent runs recorded by the orchestrator">
+  {
+    runs.length === 0 ? (
+      <EmptyState compact title="No agent runs yet" description="A run is recorded when the orchestrator sends a task to an agent." />
+    ) : (
+      <ul class="runs">
+        {runs.map((r) => (
+          <li class="run">
+            <div class="run__head">
+              <h3 class="run__agent">{AGENT_LABEL[r.agent]}</h3>
+              <StatusBadge tone={TONE[r.status]}>{LABEL[r.status]}</StatusBadge>
+            </div>
+            <dl class="run__meta">
+              <div class="run__state">
+                <dt>A2A task state</dt>
+                <dd class="mono">{r.a2a_state ?? "—"}</dd>
+              </div>
+              <div>
+                <dt>Duration</dt>
+                <dd>{formatDuration(r.started_at, r.finished_at) ?? (r.status === "running" ? "In progress" : "—")}</dd>
+              </div>
+              <div>
+                <dt>Started</dt>
+                <dd>
+                  <time datetime={r.started_at} data-local>
+                    {formatUtc(r.started_at)}
+                  </time>
+                </dd>
+              </div>
+              <div class="run__wide">
+                <dt>A2A task ID</dt>
+                <dd class="mono">{r.a2a_task_id ?? "—"}</dd>
+              </div>
+              <div class="run__wide">
+                <dt>A2A context ID</dt>
+                <dd class="mono">{r.a2a_context_id ?? "—"}</dd>
+              </div>
+              {(r.error_code || r.error) && (
+                <div class="run__wide run__error">
+                  <dt>Error</dt>
+                  <dd>
+                    {r.error_code && <code class="mono">{r.error_code}</code>}
+                    {r.error && <span class="run__error-text">{r.error}</span>}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</Card>
+
+<style>
+  .runs {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .run + .run {
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border);
+  }
+  .run__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .run__agent {
+    font-size: var(--text-md);
+  }
+  .run__meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-3) var(--space-4);
+    margin-top: var(--space-3);
+  }
+  .run__wide {
+    grid-column: 1 / -1;
+  }
+  .run__meta dt {
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+  }
+  .run__meta dd {
+    margin-top: 2px;
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+  .run__error dd {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    color: var(--color-error-text);
+  }
+  .run__error code {
+    padding: 0 var(--space-1);
+    border-radius: 4px;
+    background: var(--color-error-bg);
+    border: 1px solid var(--color-error-border);
+  }
+  .run__error-text {
+    color: var(--color-text);
+  }
+  @media (max-width: 520px) {
+    .run__meta {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .run__state {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

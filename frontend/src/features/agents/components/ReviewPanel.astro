@@ -1,0 +1,125 @@
+---
+// Reviewer result: verdict, summary and findings (most severe first).
+import Card from "../../../components/ui/Card.astro";
+import EmptyState from "../../../components/ui/EmptyState.astro";
+import WorkflowBadge from "../../workflows/components/WorkflowBadge.astro";
+import { plural } from "../../../lib/format.ts";
+import { SEVERITY_LABEL, SEVERITY_ORDER } from "../../workflows/present.ts";
+import type { Review, Severity, WorkflowStatus } from "../../workflows/schemas.ts";
+
+interface Props {
+  review: Review | null;
+  status: WorkflowStatus;
+  working: boolean;
+  hasDraft: boolean;
+}
+const { review, status, working, hasDraft } = Astro.props;
+
+const findings = review ? [...review.findings].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]) : [];
+const counts = (["high", "medium", "low"] as Severity[])
+  .map((s) => [s, findings.filter((f) => f.severity === s).length] as const)
+  .filter(([, n]) => n > 0)
+  .map(([s, n]) => `${n} ${SEVERITY_LABEL[s].toLowerCase()}`)
+  .join(", ");
+---
+
+<Card title="Reviewer verdict" id="review" icon="shield-check">
+  {
+    review ? (
+      <div class="review">
+        <div class="review__verdict">
+          <WorkflowBadge verdict={review.verdict} />
+          <span class="review__counts">
+            {findings.length === 0 ? "No findings" : `${plural(findings.length, "finding")} · ${counts}`}
+          </span>
+        </div>
+        <p class="review__summary">{review.summary}</p>
+        {findings.length > 0 && (
+          <ol class="findings" aria-label="Findings">
+            {findings.map((f) => (
+              <li class:list={["finding", `finding--${f.severity}`]}>
+                <div class="finding__head">
+                  <WorkflowBadge severity={f.severity} />
+                  <h3 class="finding__title">{f.title}</h3>
+                </div>
+                <p class="finding__detail">{f.detail}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    ) : working ? (
+      <EmptyState compact icon="loader" title="The Reviewer is assessing the draft" description="It checks the Worker's draft independently and returns a verdict with findings." />
+    ) : status === "failed" ? (
+      <EmptyState
+        compact
+        icon="circle-dashed"
+        title="No review was produced"
+        description={hasDraft ? "The workflow failed during review. The Worker's draft above was kept." : "The workflow stopped before the Reviewer ran."}
+      />
+    ) : (
+      <EmptyState compact icon="clock" title="Waiting for the draft" description="The Reviewer starts once the Worker's draft is ready." />
+    )
+  }
+</Card>
+
+<style>
+  .review__verdict {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+  .review__counts {
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+  .review__summary {
+    margin-top: var(--space-3);
+    font-size: var(--text-lg);
+    line-height: var(--leading-relaxed);
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+  }
+  .findings {
+    list-style: none;
+    padding: 0;
+    margin: var(--space-4) 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .finding {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-border);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+  }
+  .finding--high {
+    border-left-color: var(--color-error-fg);
+  }
+  .finding--medium {
+    border-left-color: var(--color-warning-fg);
+  }
+  .finding--low {
+    border-left-color: var(--color-border-strong);
+  }
+  .finding__head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  .finding__title {
+    font-size: var(--text-md);
+    line-height: 22px;
+    overflow-wrap: anywhere;
+  }
+  .finding__detail {
+    margin-top: var(--space-1);
+    color: var(--color-text);
+    line-height: var(--leading-relaxed);
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+  }
+</style>

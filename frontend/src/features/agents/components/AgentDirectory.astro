@@ -1,0 +1,154 @@
+---
+// The fixed two-agent pipeline, with live Agent Card discovery status from
+// `GET /api/agents`. If discovery could not be loaded, says so explicitly
+// rather than guessing whether the agents are up.
+import Icon from "../../../components/ui/Icon.astro";
+import StatusBadge from "../../../components/ui/StatusBadge.astro";
+import type { AgentInfo, AgentRole } from "../../workflows/schemas.ts";
+
+interface Props {
+  agents: AgentInfo[] | null;
+}
+const { agents } = Astro.props;
+
+const ROLES: { role: AgentRole; step: string; title: string; text: string; icon: "file-text" | "shield-check" }[] = [
+  {
+    role: "worker",
+    step: "2",
+    title: "Worker drafts",
+    text: "Writes an answer: title, summary, Markdown body and its assumptions.",
+    icon: "file-text",
+  },
+  {
+    role: "reviewer",
+    step: "3",
+    title: "Reviewer assesses",
+    text: "Independently checks the draft and returns Passed or Changes requested, with findings.",
+    icon: "shield-check",
+  },
+];
+const byRole = new Map(agents?.map((a) => [a.role, a]));
+---
+
+<ol class="steps">
+  <li class="step">
+    <span class="step__num" aria-hidden="true">1</span>
+    <div class="step__body">
+      <p class="step__title">You submit a question</p>
+      <p class="step__text">The orchestrator validates and stores it. One workflow runs at a time.</p>
+    </div>
+  </li>
+  {
+    ROLES.map((r) => {
+      const agent = byRole.get(r.role);
+      return (
+        <li class="step">
+          <span class="step__num" aria-hidden="true">
+            {r.step}
+          </span>
+          <div class="step__body">
+            <p class="step__title">{r.title}</p>
+            <p class="step__text">{r.text}</p>
+            <div class="agent">
+              <Icon name={r.icon} size={14} />
+              {agent ? (
+                <>
+                  <span class="agent__name">{agent.name}</span>
+                  {agent.version && <span class="agent__version mono">v{agent.version}</span>}
+                  <StatusBadge tone={agent.reachable ? "success" : "error"} icon={agent.reachable ? "check" : "x"}>
+                    {agent.reachable ? "Reachable" : "Unreachable"}
+                  </StatusBadge>
+                </>
+              ) : (
+                <span class="agent__unknown">Status unavailable</span>
+              )}
+            </div>
+            {agent && !agent.reachable && agent.error && <p class="agent__error">{agent.error}</p>}
+          </div>
+        </li>
+      );
+    })
+  }
+</ol>
+<p class="steps__footnote">
+  <strong>Changes requested</strong> is a completed review, not a failure. Agent status comes from each agent's
+  A2A Agent Card.
+</p>
+
+<style>
+  .steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .step {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+  .step__num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    background: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-secondary);
+  }
+  .step__title {
+    font-weight: var(--weight-semibold);
+    line-height: 24px;
+  }
+  .step__text {
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+  .agent {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px var(--space-2);
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-sunken);
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+  }
+  .agent__name {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+  }
+  .agent__version {
+    font-size: var(--text-xs);
+    margin-right: auto;
+  }
+  .agent__unknown {
+    margin-right: auto;
+  }
+  .agent__error {
+    margin-top: var(--space-1);
+    font-size: var(--text-xs);
+    color: var(--color-error-text);
+    overflow-wrap: anywhere;
+  }
+  .steps__footnote {
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border);
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+  }
+  .steps__footnote strong {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+  }
+</style>

@@ -1,99 +1,174 @@
 ---
-import Base from "../layouts/Base.astro";
----
+// Dashboard: submit a task, see whether one is running, see recent results.
+// POST is a plain form submission forwarded to `POST /api/workflows`; on
+// success the browser is redirected (303) to the workflow's detail page.
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import PageHeader from "../components/navigation/PageHeader.astro";
+import Card from "../components/ui/Card.astro";
+import Button from "../components/ui/Button.astro";
+import Callout from "../components/ui/Callout.astro";
+import EmptyState from "../components/ui/EmptyState.astro";
+import ErrorState from "../components/ui/ErrorState.astro";
+import TaskForm, { type FormNotice } from "../features/workflows/components/TaskForm.astro";
+import WorkflowList from "../features/workflows/components/WorkflowList.astro";
+import AgentDirectory from "../features/agents/components/AgentDirectory.astro";
+import { api } from "../lib/config.ts";
+import { ApiError, describeLoadError, fieldMessage } from "../lib/errors.ts";
+import { truncate } from "../lib/format.ts";
+import { isActive, type Workflow } from "../features/workflows/schemas.ts";
 
-<Base title="Submit" active="submit">
-  <h1>Ask the agents</h1>
-  <p class="lead">
-    The Worker agent drafts an answer; the Reviewer agent independently evaluates it. Both talk to the
-    orchestrator over A2A. One workflow runs at a time.
-  </p>
+const KEY = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_FORM_BYTES = 64 * 1024;
 
-  <form id="submit-form" class="card" novalidate>
-    <label for="question">Software engineering question</label>
-    <textarea
-      id="question"
-      name="question"
-      required
-      minlength="10"
-      maxlength="4000"
-      placeholder="Propose validation rules for a Rust API that creates crowdfunding campaigns."
-      aria-describedby="question-hint"></textarea>
-    <p id="question-hint" class="hint"><span id="count">0</span> / 4000 characters (minimum 10).</p>
-    <div class="form-row">
-      <span class="hint">Nothing is executed or changed; results are text only.</span>
-      <button id="submit-btn" type="submit">Run workflow</button>
-    </div>
-    <div id="form-status" aria-live="polite"></div>
-  </form>
+let idempotencyKey: string = crypto.randomUUID();
+let value = "";
+let fieldError: string | undefined;
+let notice: FormNotice | undefined;
 
-  <section class="card" aria-labelledby="agents-heading">
-    <h2 id="agents-heading">Agents (discovered via Agent Cards)</h2>
-    <div id="agents" class="agents"><p class="msg msg-info"><span class="spinner"></span> Discovering agents…</p></div>
-  </section>
-</Base>
-
-<script>
-  import { api, ApiError } from "../scripts/api";
-  import { badge, byId, h, message } from "../scripts/dom";
-
-  const form = byId<HTMLFormElement>("submit-form");
-  const textarea = byId<HTMLTextAreaElement>("question");
-  const button = byId<HTMLButtonElement>("submit-btn");
-  const status = byId("form-status");
-  const count = byId("count");
-
-  // One key per intended submission: double-clicks and retries of the same
-  // submission never create a second workflow.
-  let idempotencyKey = crypto.randomUUID();
-  textarea.addEventListener("input", () => {
-    count.textContent = String(textarea.value.length);
-    idempotencyKey = crypto.randomUUID();
-  });
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const question = textarea.value.trim();
-    status.replaceChildren();
-    if (question.length < 10) {
-      status.append(message("error", "Please enter at least 10 characters."));
-      textarea.focus();
-      return;
-    }
-    button.disabled = true;
-    status.append(h("p", { class: "msg msg-info" }, h("span", { class: "spinner" }), " Submitting…"));
+if (Astro.request.method === "POST") {
+  const length = Number(Astro.request.headers.get("content-length") ?? "0");
+  const form = length > MAX_FORM_BYTES ? null : await Astro.request.formData().catch(() => null);
+  if (!form) {
+    Astro.response.status = length > MAX_FORM_BYTES ? 413 : 400;
+    fieldError = length > MAX_FORM_BYTES ? "The question is too long." : "The form could not be read. Try again.";
+  } else {
+    value = String(form.get("question") ?? "");
+    const posted = String(form.get("idempotency_key") ?? "");
+    if (KEY.test(posted)) idempotencyKey = posted;
     try {
-      const wf = await api.create(question, idempotencyKey);
-      window.location.assign(`/workflow/?id=${encodeURIComponent(wf.id)}`);
+      const { workflow } = await api.create(value.trim(), idempotencyKey);
+      return Astro.redirect(`/workflows/${workflow.id}`, 303);
     } catch (e) {
-      status.replaceChildren(
-        message("error", e instanceof ApiError ? e.message : "Unexpected error while submitting."),
-      );
-      if (e instanceof ApiError && e.status === 409) {
-        status.append(h("p", { class: "hint" }, h("a", { href: "/history/" }, "View the running workflow in History")));
+      const err = e instanceof ApiError ? e : null;
+      Astro.response.status = err?.kind === "http" ? err.status : 503;
+      if (err?.code === "validation_failed") {
+        fieldError = fieldMessage(err.message);
+      } else if (err?.code === "payload_too_large") {
+        fieldError = "The question is too long.";
+      } else if (err?.code === "workflow_active") {
+        notice = {
+          tone: "warning",
+          title: "Another workflow is still running",
+          detail: "Only one workflow runs at a time. Your question is kept below; submit it again when the current one finishes.",
+        };
+      } else if (err?.code === "idempotency_key_mismatch") {
+        idempotencyKey = crypto.randomUUID();
+        notice = {
+          tone: "warning",
+          title: "Please submit again",
+          detail: "This form was already used for a different question. It has been reset; submit once more.",
+        };
+      } else if (err?.uncertain) {
+        // The workflow may exist. Keep the key: resubmitting the same question
+        // replays it instead of starting a second one.
+        notice = {
+          tone: "error",
+          title: "We couldn't confirm the submission",
+          detail: "The API did not answer in time. Your task may have started. Check Workflows, or submit again: the same question will not run twice.",
+          link: { href: "/workflows", label: "Open Workflows" },
+        };
+      } else {
+        notice = {
+          tone: "error",
+          title: "The task was not submitted",
+          detail:
+            err?.kind === "network"
+              ? "The orchestrator API is unreachable. Check that it is running, then submit again."
+              : `The API refused the request (${err?.code ?? "unknown error"}). Submit again, or check the API logs.`,
+        };
       }
-      button.disabled = false;
-    }
-  });
-
-  async function loadAgents() {
-    const box = byId("agents");
-    try {
-      const { agents } = await api.agents();
-      box.replaceChildren(
-        ...agents.map((a) =>
-          h(
-            "div",
-            { class: "agent" },
-            h("div", { class: "header-row" }, h("span", { class: "agent-name" }, a.name), badge(a.reachable ? "reachable" : "unreachable")),
-            h("div", { class: "agent-meta" }, `${a.role}${a.version ? ` · v${a.version}` : ""}`),
-            h("p", { class: "agent-meta" }, a.reachable ? (a.description ?? "") : (a.error ?? "Unreachable")),
-          ),
-        ),
-      );
-    } catch (e) {
-      box.replaceChildren(message("error", e instanceof ApiError ? e.message : "Could not load agents."));
     }
   }
-  void loadAgents();
-</script>
+}
+
+const [recentResult, agentsResult] = await Promise.allSettled([api.list({ limit: 5 }), api.agents()]);
+const recent: Workflow[] | null = recentResult.status === "fulfilled" ? recentResult.value.items : null;
+const agents = agentsResult.status === "fulfilled" ? agentsResult.value : null;
+const active = recent?.find((w) => isActive(w.status));
+const recentError = recentResult.status === "rejected" ? describeLoadError(recentResult.reason, "recent workflows") : null;
+
+if (notice?.title === "Another workflow is still running" && active) {
+  notice.link = { href: `/workflows/${active.id}`, label: "View the running workflow" };
+}
+---
+
+<DashboardLayout title="Dashboard" active="dashboard">
+  <PageHeader
+    title="Dashboard"
+    description="Ask a software engineering question. A Worker agent drafts an answer and a Reviewer agent independently checks it, over the Agent2Agent protocol."
+  />
+
+  <div class="dashboard">
+    <div class="dashboard__primary">
+      {
+        active && !notice && (
+          <Callout tone="info" title="A workflow is in progress" icon="loader">
+            <p>{truncate(active.question, 140)}</p>
+            <div class="callout__actions">
+              <Button href={`/workflows/${active.id}`} size="sm" iconEnd="arrow-right">
+                View progress
+              </Button>
+            </div>
+          </Callout>
+        )
+      }
+
+      <Card title="New task" id="new-task" icon="send">
+        <TaskForm idempotencyKey={idempotencyKey} value={value} fieldError={fieldError} notice={notice} />
+      </Card>
+
+      <Card title="Recent workflows" id="recent" flush>
+        <Fragment slot="actions">
+          {recent && recent.length > 0 && <Button href="/workflows" size="sm" variant="ghost" iconEnd="arrow-right">View all</Button>}
+        </Fragment>
+        {
+          recentError ? (
+            <div class="pad">
+              <ErrorState title={recentError.title} detail={recentError.detail} />
+            </div>
+          ) : recent && recent.length > 0 ? (
+            <WorkflowList items={recent} compact />
+          ) : (
+            <EmptyState compact title="No workflows yet" description="Your submitted tasks and their reviews will appear here." />
+          )
+        }
+      </Card>
+    </div>
+
+    <aside class="dashboard__aside" aria-label="How it works">
+      <Card title="How it works" id="how" level={2}>
+        <AgentDirectory agents={agents} />
+      </Card>
+    </aside>
+  </div>
+</DashboardLayout>
+
+<style>
+  .dashboard {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: var(--space-5);
+    align-items: start;
+  }
+  .dashboard__primary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+  .dashboard__aside {
+    position: sticky;
+    top: var(--space-6);
+  }
+  .pad {
+    padding: var(--space-4);
+  }
+  @media (max-width: 1100px) {
+    .dashboard {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .dashboard__aside {
+      position: static;
+    }
+  }
+</style>

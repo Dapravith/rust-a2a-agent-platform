@@ -1,8 +1,17 @@
 ---
-import Base from "../layouts/Base.astro";
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+import EmptyState from "../components/ui/EmptyState.astro";
+import PageHeader from "../components/navigation/PageHeader.astro";
 ---
 
-<Base title="Not found">
-  <h1>Page not found</h1>
-  <p><a href="/">Back to submit</a></p>
-</Base>
+<DashboardLayout title="Page not found">
+  <PageHeader title="Page not found" />
+  <Card>
+    <EmptyState icon="circle-dashed" title="This page doesn't exist" description="Check the address, or go back to the dashboard.">
+      <Button href="/" variant="primary" icon="home">Dashboard</Button>
+      <Button href="/workflows" icon="list">Workflows</Button>
+    </EmptyState>
+  </Card>
+</DashboardLayout>

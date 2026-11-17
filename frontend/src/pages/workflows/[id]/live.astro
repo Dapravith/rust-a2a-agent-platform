@@ -1,0 +1,25 @@
+---
+// HTML fragment of the detail view, polled by src/scripts/workflow-live.ts.
+// Same component as the full page, so the browser never renders agent output
+// itself. Non-200 responses carry no body; the script keeps the current view.
+import WorkflowDetailView from "../../../features/workflows/components/WorkflowDetailView.astro";
+import { api } from "../../../lib/config.ts";
+import { ApiError } from "../../../lib/errors.ts";
+import { isWorkflowId } from "../../../features/workflows/api.ts";
+import type { WorkflowDetail } from "../../../features/workflows/schemas.ts";
+
+export const partial = true;
+
+const id = Astro.params.id ?? "";
+if (!isWorkflowId(id)) return new Response(null, { status: 404 });
+
+let workflow: WorkflowDetail;
+try {
+  workflow = await api.get(id);
+} catch (e) {
+  const status = e instanceof ApiError && e.status === 404 ? 404 : 503;
+  return new Response(null, { status });
+}
+---
+
+<WorkflowDetailView workflow={workflow} />
