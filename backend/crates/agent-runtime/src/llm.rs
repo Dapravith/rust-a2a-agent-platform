@@ -23,6 +23,8 @@ pub enum LlmError {
     Declined(String),
     #[error("LLM output was not valid for the contract: {0}")]
     InvalidOutput(String),
+    #[error("LLM did not answer within the overall deadline of {0:?}")]
+    Deadline(Duration),
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +32,11 @@ pub struct LlmConfig {
     pub api_key: String,
     pub model: String,
     pub base_url: String,
+    /// Per HTTP attempt.
     pub timeout: Duration,
+    /// Across all attempts and backoff. Keep it below the API's
+    /// `AGENT_TIMEOUT_SECS` so an agent never works past the caller's deadline.
+    pub deadline: Duration,
     pub max_tokens: u32,
     pub effort: String,
     /// Opt into server-side refusal fallbacks (`fallbacks: "default"`).
@@ -50,22 +56,32 @@ impl LlmConfig {
         let mode = std::env::var("INFERENCE_MODE").unwrap_or_else(|_| "mock".into());
         match mode.as_str() {
             "mock" => Ok(None),
-            "anthropic" => Ok(Some(Self {
-                api_key: std::env::var("ANTHROPIC_API_KEY")
-                    .ok()
-                    .filter(|k| !k.trim().is_empty())
-                    .ok_or("INFERENCE_MODE=anthropic requires ANTHROPIC_API_KEY")?,
-                model: std::env::var("ANTHROPIC_MODEL")
-                    .unwrap_or_else(|_| "claude-opus-5-5".into()),
-                base_url: std::env::var("ANTHROPIC_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.anthropic.com".into()),
-                timeout: Duration::from_secs(env_parse("LLM_TIMEOUT_SECS", 180)?),
-                max_tokens: env_parse("LLM_MAX_TOKENS", 16_000)?,
-                effort: std::env::var("LLM_EFFORT").unwrap_or_else(|_| "medium".into()),
-                refusal_fallback: std::env::var("ANTHROPIC_REFUSAL_FALLBACK")
-                    .map(|v| v != "off")
-                    .unwrap_or(true),
-            })),
+            "anthropic" => {
+                let timeout = Duration::from_secs(env_parse("LLM_TIMEOUT_SECS", 120)?);
+                let deadline = Duration::from_secs(env_parse("LLM_DEADLINE_SECS", 200)?);
+                if timeout.is_zero() || deadline < timeout {
+                    return Err(
+                        "LLM_TIMEOUT_SECS must be > 0 and not exceed LLM_DEADLINE_SECS".into(),
+                    );
+                }
+                Ok(Some(Self {
+                    api_key: std::env::var("ANTHROPIC_API_KEY")
+                        .ok()
+                        .filter(|k| !k.trim().is_empty())
+                        .ok_or("INFERENCE_MODE=anthropic requires ANTHROPIC_API_KEY")?,
+                    model: std::env::var("ANTHROPIC_MODEL")
+                        .unwrap_or_else(|_| "claude-opus-5-5".into()),
+                    base_url: std::env::var("ANTHROPIC_BASE_URL")
+                        .unwrap_or_else(|_| "https://api.anthropic.com".into()),
+                    timeout,
+                    deadline,
+                    max_tokens: env_parse("LLM_MAX_TOKENS", 16_000)?,
+                    effort: std::env::var("LLM_EFFORT").unwrap_or_else(|_| "medium".into()),
+                    refusal_fallback: std::env::var("ANTHROPIC_REFUSAL_FALLBACK")
+                        .map(|v| v != "off")
+                        .unwrap_or(true),
+                }))
+            }
             other => Err(format!(
                 "INFERENCE_MODE must be `mock` or `anthropic`, got `{other}`"
             )),
@@ -112,8 +128,23 @@ impl LlmClient {
         body
     }
 
-    /// One structured-output request; retries 429/5xx/connect errors twice.
+    /// One structured-output request; retries 429/5xx/connect errors twice,
+    /// all within [`LlmConfig::deadline`].
     pub async fn generate<T: DeserializeOwned + Validate>(
+        &self,
+        system: &str,
+        user: &str,
+        schema: Value,
+    ) -> Result<T, LlmError> {
+        tokio::time::timeout(
+            self.cfg.deadline,
+            self.generate_with_retries(system, user, schema),
+        )
+        .await
+        .unwrap_or(Err(LlmError::Deadline(self.cfg.deadline)))
+    }
+
+    async fn generate_with_retries<T: DeserializeOwned + Validate>(
         &self,
         system: &str,
         user: &str,
@@ -214,6 +245,7 @@ mod tests {
             model: "claude-opus-5-5".into(),
             base_url: base_url.into(),
             timeout: Duration::from_secs(5),
+            deadline: Duration::from_secs(10),
             max_tokens: 16_000,
             effort: "medium".into(),
             refusal_fallback: true,

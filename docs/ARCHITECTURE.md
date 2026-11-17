@@ -29,9 +29,9 @@ sequenceDiagram
   O-->>UI: 202 {id}
   O->>DB: status=running
   O->>W: GET /.well-known/agent-card.json (verify name + origin)
-  O->>W: SendMessage(data: {question})
+  O->>W: SendMessage(data: {question}, returnImmediately)
   W-->>O: Task(completed, artifact "draft") or Message
-  Note over O: non-terminal Task → GetTask polling until deadline
+  Note over O: Task(working) → GetTask polling until terminal or deadline;<br/>on deadline → CancelTask (agent aborts in-flight LLM work)
   O->>DB: agent_run completed + draft artifact (one tx)
   O->>R: SendMessage(data: {question, draft})
   R-->>O: Task(completed, artifact "review")
@@ -71,10 +71,12 @@ Invalid agent input → task `rejected`; inference failure → task `failed` wit
 
 | Concern | Decision |
 |---|---|
-| Duplicate execution | DB partial unique index (`workflows_single_active`) → `409`; optional `Idempotency-Key` returns the existing workflow |
+| Duplicate execution | DB partial unique index (`workflows_single_active`) → `409`; optional `Idempotency-Key` returns the existing workflow for the same question, `422 idempotency_key_mismatch` for a different one |
 | Restart recovery | At startup, `queued`/`running` rows are marked `failed` ("Interrupted by an orchestrator restart"). No silent re-execution, so no duplicate LLM spend |
 | Crash safety | Each workflow runs in a supervised task; a panic is recorded as `failed` |
-| Timeouts | One deadline per agent call (`AGENT_TIMEOUT_SECS`, default 240 s) covering send + polling; HTTP socket timeout sits 5 s above it |
+| Timeouts | One deadline per agent call (`AGENT_TIMEOUT_SECS`, default 240 s) covering send + polling; HTTP socket timeout sits 5 s above it. On the deadline the API sends `CancelTask`; the agent's executor aborts the in-flight work (the SDK alone only marks the task canceled). Agents bound LLM retries with `LLM_DEADLINE_SECS` (default 200 s, keep below `AGENT_TIMEOUT_SECS`) |
+| Error exposure | Errors stored on workflows/runs are client-visible, so they carry only a category (`internal error…`, `agent unreachable…`) with URLs redacted; full details go to the server logs |
+| Agent memory | Known limit: the SDK 0.5.3 `InMemoryTaskStore` keeps every task for the process lifetime (a bound exists only in unreleased SDK `main`). With one workflow at a time this is ~2 small tasks per workflow; restart agents periodically until the SDK release |
 | Agent trust | Agents come only from configured URLs; card name must match; only JSON-RPC interfaces on the configured origin are used; redirects disabled |
 | Untrusted LLM output | Structured JSON output, strict decode + validation on both agent and orchestrator; UI renders text only (`textContent`), strict CSP with no inline scripts |
 | Secrets | Env only, validated at startup; `DATABASE_URL` redacted in logs; API key never logged; nothing server-side in the static bundle (CI check) |

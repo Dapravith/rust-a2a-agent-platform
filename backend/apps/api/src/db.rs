@@ -16,6 +16,8 @@ const IDEMPOTENCY_CONSTRAINT: &str = "workflows_idempotency_key_key";
 pub enum DbError {
     #[error("another workflow is already queued or running")]
     ActiveWorkflowExists,
+    #[error("Idempotency-Key was already used for a different question")]
+    IdempotencyKeyMismatch,
     #[error("database error: {0}")]
     Sqlx(#[from] sqlx::Error),
 }
@@ -69,7 +71,9 @@ fn constraint_of(e: &sqlx::Error) -> Option<String> {
 }
 
 /// Inserts a queued workflow. Returns `(workflow, created)`; `created` is
-/// false when the idempotency key matched an existing workflow.
+/// false when the idempotency key matched an existing workflow for the same
+/// question. Reusing a key for a different question is an error, never a
+/// silent answer to another request.
 pub async fn create_workflow(
     pool: &PgPool,
     question: &str,
@@ -100,6 +104,9 @@ pub async fn create_workflow(
                     .bind(idempotency_key)
                     .fetch_one(pool)
                     .await?;
+                if w.question != question {
+                    return Err(DbError::IdempotencyKeyMismatch);
+                }
                 Ok((w, false))
             }
             Some(ACTIVE_INDEX) => Err(DbError::ActiveWorkflowExists),

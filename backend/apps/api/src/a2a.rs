@@ -17,6 +17,8 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 const MAX_ERROR_CHARS: usize = 500;
+/// Upper bound for the best-effort CancelTask sent after a deadline.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -37,15 +39,37 @@ pub enum AgentError {
 }
 
 impl AgentError {
-    /// A bounded, user-safe description stored with the workflow.
+    /// A bounded, user-safe description stored with the workflow: keeps the
+    /// error category, drops URLs (internal topology). Full text is logged.
     pub fn safe_message(&self) -> String {
-        let s = self.to_string();
+        let s = redact_urls(&self.to_string());
         let mut out: String = s.chars().take(MAX_ERROR_CHARS).collect();
         if s.chars().count() > MAX_ERROR_CHARS {
             out.push('…');
         }
         out
     }
+}
+
+/// Replaces every `http(s)://…` token with `<agent-url>`.
+fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = ["http://", "https://"]
+        .iter()
+        .filter_map(|p| rest.find(p))
+        .min()
+    {
+        out.push_str(&rest[..pos]);
+        out.push_str("<agent-url>");
+        let tail = &rest[pos..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | ',' | '>'))
+            .unwrap_or(tail.len());
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A trusted agent: the configured base URL plus the card name we expect.
@@ -167,12 +191,15 @@ impl A2AGateway {
                 accepted_output_modes: Some(vec![MEDIA_TYPE_JSON.into()]),
                 task_push_notification_config: None,
                 history_length: Some(0),
-                return_immediately: None,
+                // Get the task id back at once and drive completion with
+                // GetTask, so a task that outlives our deadline can be canceled.
+                return_immediately: Some(true),
             }),
             metadata: None,
             tenant: None,
         };
 
+        let mut task_id: Option<TaskId> = None;
         let work = async {
             match client.send_message(&request).await.map_err(map_rpc_error)? {
                 SendMessageResponse::Message(m) => Ok(AgentOutcome {
@@ -182,6 +209,7 @@ impl A2AGateway {
                     state: "message".into(),
                 }),
                 SendMessageResponse::Task(mut task) => {
+                    task_id = Some(task.id.clone());
                     // Poll until the task leaves submitted/working.
                     while matches!(task.status.state, TaskState::Submitted | TaskState::Working) {
                         tokio::time::sleep(self.poll_interval).await;
@@ -201,7 +229,26 @@ impl A2AGateway {
 
         match tokio::time::timeout(self.timeout, work).await {
             Ok(result) => result,
-            Err(_) => Err(AgentError::Timeout(self.timeout)),
+            Err(_) => {
+                if let Some(id) = task_id {
+                    // Best effort: stop the agent's work (e.g. LLM spend).
+                    let cancel = CancelTaskRequest {
+                        id: id.clone(),
+                        metadata: None,
+                        tenant: None,
+                    };
+                    match tokio::time::timeout(CANCEL_TIMEOUT, client.cancel_task(&cancel)).await {
+                        Ok(Ok(_)) => {
+                            tracing::info!(task_id = %id, "canceled agent task after deadline")
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(task_id = %id, error = %e.message, "CancelTask failed")
+                        }
+                        Err(_) => tracing::warn!(task_id = %id, "CancelTask timed out"),
+                    }
+                }
+                Err(AgentError::Timeout(self.timeout))
+            }
         }
     }
 }
@@ -272,6 +319,23 @@ mod tests {
             expected_name: "Draft Worker".into(),
             base_url: Url::parse("http://127.0.0.1:9101").unwrap(),
         }
+    }
+
+    #[test]
+    fn safe_message_redacts_urls_but_keeps_category() {
+        let e = AgentError::Unreachable(
+            "error sending request for url (http://10.0.0.7:9101/.well-known/agent-card.json)"
+                .into(),
+        );
+        assert_eq!(
+            e.safe_message(),
+            "agent unreachable: error sending request for url (<agent-url>)"
+        );
+        assert_eq!(
+            redact_urls("a https://x/y b http://z"),
+            "a <agent-url> b <agent-url>"
+        );
+        assert_eq!(redact_urls("no urls here"), "no urls here");
     }
 
     #[test]

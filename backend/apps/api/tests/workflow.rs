@@ -99,6 +99,48 @@ async fn fake_agent(card_name: &str, delay: Duration, script: Script) -> String 
     url
 }
 
+/// Reports WORKING at once, then never finishes; records CancelTask calls.
+struct Hanging {
+    canceled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AgentExecutor for Hanging {
+    fn execute(
+        &self,
+        ctx: ExecutorContext,
+    ) -> BoxStream<'static, Result<StreamResponse, A2AError>> {
+        let (t, c) = ctx.task_info();
+        let working = status_ev(&t, &c, TaskState::Working, None);
+        Box::pin(stream::iter([Ok(working)]).chain(stream::pending()))
+    }
+    fn cancel(&self, ctx: ExecutorContext) -> BoxStream<'static, Result<StreamResponse, A2AError>> {
+        self.canceled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let (t, c) = ctx.task_info();
+        Box::pin(stream::iter([Ok(status_ev(
+            &t,
+            &c,
+            TaskState::Canceled,
+            None,
+        ))]))
+    }
+}
+
+async fn hanging_agent(card_name: &str, canceled: Arc<std::sync::atomic::AtomicBool>) -> String {
+    let (l, url) = bind().await;
+    let mut card = worker_agent::Drafter::new(None).card(&url);
+    card.name = card_name.into();
+    let handler = Arc::new(DefaultRequestHandler::new(
+        Hanging { canceled },
+        InMemoryTaskStore::new(),
+    ));
+    let router = axum::Router::new()
+        .nest("/jsonrpc", jsonrpc_router(handler))
+        .merge(agent_card_router(Arc::new(StaticAgentCard::new(card))));
+    serve(router, l).await;
+    url
+}
+
 fn status_ev(t: &str, c: &str, state: TaskState, text: Option<&str>) -> StreamResponse {
     StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
         task_id: t.into(),
@@ -358,6 +400,46 @@ async fn idempotency_key_returns_existing_workflow(pool: PgPool) {
     );
 }
 
+/// REVIEW-002: a reused key with a different body must not return another
+/// workflow (silently answering a different question).
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn idempotency_key_reuse_with_different_question_is_rejected(pool: PgPool) {
+    let (w, r) = (real_worker().await, real_reviewer().await);
+    let h = harness(pool, &w, &r, SECS_5).await;
+    let send = |question: &'static str| {
+        h.http
+            .post(format!("{}/api/workflows", h.base))
+            .header("Idempotency-Key", "submit-reused")
+            .json(&json!({ "question": question }))
+            .send()
+    };
+    let a = send(QUESTION).await.unwrap();
+    assert_eq!(a.status(), 202);
+    let a: Value = a.json().await.unwrap();
+    h.wait_terminal(a["id"].as_str().unwrap()).await;
+
+    let b = send("A different question about pagination limits.")
+        .await
+        .unwrap();
+    assert_eq!(b.status(), 422);
+    let b: Value = b.json().await.unwrap();
+    assert_eq!(b["error"]["code"], "idempotency_key_mismatch");
+    // Surrounding whitespace is not a different question.
+    let c = h
+        .http
+        .post(format!("{}/api/workflows", h.base))
+        .header("Idempotency-Key", "submit-reused")
+        .json(&json!({ "question": format!("  {QUESTION}\n") }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(c.status(), 200);
+    assert_eq!(
+        db::list_workflows(&h.pool, 10, None).await.unwrap().len(),
+        1
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A2A interaction variants and failures
 // ---------------------------------------------------------------------------
@@ -379,6 +461,50 @@ async fn direct_message_response_is_supported(pool: PgPool) {
     assert_eq!(wf["runs"][1]["a2a_state"], "message");
 }
 
+/// REVIEW-001: a failure after the run was started (here: persisting the
+/// artifact) must leave the agent run `failed`, never stuck in `running`.
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn persistence_failure_marks_run_failed(pool: PgPool) {
+    // Make storing the Worker's draft fail inside this test's own database.
+    sqlx::query("ALTER TABLE artifacts ADD CONSTRAINT test_block_drafts CHECK (kind <> 'draft')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (w, r) = (real_worker().await, real_reviewer().await);
+    let wf = harness(pool, &w, &r, SECS_5).await.run().await;
+    assert_eq!(wf["status"], "failed", "{wf}");
+    let runs = wf["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "reviewer must not run: {wf}");
+    assert_eq!(runs[0]["status"], "failed", "{wf}");
+    assert!(runs[0]["finished_at"].is_string(), "{wf}");
+    // REVIEW-003: database internals must not reach API clients.
+    for err in [
+        wf["error"].as_str().unwrap(),
+        runs[0]["error"].as_str().unwrap(),
+    ] {
+        assert_no_internals(err);
+        assert!(
+            err.contains("internal error"),
+            "unexpected error text: {err}"
+        );
+    }
+}
+
+/// Stored errors are shown to API clients: no SQL, schema names or URLs.
+fn assert_no_internals(err: &str) {
+    for leak in [
+        "database error",
+        "constraint",
+        "relation",
+        "artifacts",
+        "http://",
+        "https://",
+        "127.0.0.1",
+    ] {
+        assert!(!err.contains(leak), "error leaks `{leak}`: {err}");
+    }
+}
+
 async fn expect_worker_failure(pool: PgPool, worker: String, timeout: Duration, needle: &str) {
     let r = real_reviewer().await;
     let wf = harness(pool, &worker, &r, timeout).await.run().await;
@@ -389,6 +515,8 @@ async fn expect_worker_failure(pool: PgPool, worker: String, timeout: Duration, 
         "error `{err}` should contain `{needle}`"
     );
     assert_eq!(wf["runs"][0]["status"], "failed");
+    assert_no_internals(err);
+    assert_no_internals(wf["runs"][0]["error"].as_str().unwrap());
     assert_eq!(
         wf["runs"].as_array().unwrap().len(),
         1,
@@ -449,6 +577,32 @@ async fn agent_timeout_fails_workflow(pool: PgPool) {
     let never: Script = Arc::new(|t, c| vec![status_ev(t, c, TaskState::Completed, None)]);
     let w = fake_agent("Draft Worker", Duration::from_secs(10), never).await;
     expect_worker_failure(pool, w, Duration::from_millis(500), "did not finish").await;
+}
+
+/// REVIEW-005: when the API's deadline passes, it cancels the agent's task
+/// (so the agent stops spending) instead of just walking away.
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn timeout_cancels_the_agent_task(pool: PgPool) {
+    let canceled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let w = hanging_agent("Draft Worker", canceled.clone()).await;
+    let r = real_reviewer().await;
+    let wf = harness(pool, &w, &r, Duration::from_millis(800))
+        .await
+        .run()
+        .await;
+    assert_eq!(wf["status"], "failed", "{wf}");
+    assert!(
+        wf["error"].as_str().unwrap().contains("did not finish"),
+        "{wf}"
+    );
+    assert_eq!(wf["runs"][0]["status"], "failed", "{wf}");
+    for _ in 0..100 {
+        if canceled.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the agent never received CancelTask after the deadline");
 }
 
 #[sqlx::test(migrator = "api::db::MIGRATOR")]
