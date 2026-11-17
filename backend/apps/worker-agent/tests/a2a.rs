@@ -109,3 +109,50 @@ async fn rejects_invalid_input_without_crashing() {
         TaskState::Rejected
     );
 }
+
+/// The advertised JSON-RPC URL must also work with a trailing slash
+/// (found by the official A2A TCK, whose client posts to `<url>/`).
+#[tokio::test]
+async fn jsonrpc_endpoint_accepts_trailing_slash() {
+    let url = spawn().await;
+    let body = json!({"jsonrpc": "2.0", "id": "1", "method": "GetTask",
+        "params": {"id": "does-not-exist"}});
+    for path in ["/jsonrpc", "/jsonrpc/"] {
+        let resp: serde_json::Value = reqwest::Client::new()
+            .post(format!("{url}{path}"))
+            .header("A2A-Version", "1.0")
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], -32001, "{path}: {resp}");
+    }
+}
+
+/// Capabilities the card declares `false` are refused with
+/// UnsupportedOperationError (-32004), not silently served (found by the TCK).
+#[tokio::test]
+async fn undeclared_capabilities_are_refused() {
+    let url = spawn().await;
+    let card = AgentCardResolver::new(None).resolve(&url).await.unwrap();
+    assert_eq!(card.capabilities.streaming, Some(false));
+    assert_eq!(card.capabilities.extended_agent_card, Some(false));
+    let message = json!({"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]});
+    for (method, params) in [
+        ("SendStreamingMessage", json!({"message": message})),
+        ("GetExtendedAgentCard", json!({})),
+    ] {
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/jsonrpc"))
+            .header("A2A-Version", "1.0")
+            .json(&json!({"jsonrpc": "2.0", "id": "1", "method": method, "params": params}))
+            .send()
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["error"]["code"], -32004, "{method}: {body}");
+    }
+}

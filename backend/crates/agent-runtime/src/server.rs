@@ -54,7 +54,7 @@ pub fn agent_card(
             streaming: Some(false),
             push_notifications: Some(false),
             extensions: None,
-            extended_agent_card: None,
+            extended_agent_card: Some(false),
         },
         skills: vec![skill],
         default_input_modes: vec![MEDIA_TYPE_JSON.into()],
@@ -208,13 +208,30 @@ pub const MAX_AGENT_BODY_BYTES: usize = 256 * 1024;
 
 /// The complete HTTP surface of one agent: JSON-RPC, Agent Card, health.
 pub fn router<S: Skill>(skill: S, public_url: &str) -> axum::Router {
-    let card = Arc::new(StaticAgentCard::new(skill.card(public_url)));
-    let handler = Arc::new(DefaultRequestHandler::new(
-        SkillExecutor::new(skill),
-        InMemoryTaskStore::new(),
-    ));
+    let card = skill.card(public_url);
+    // Enforce what the card advertises: the SDK only refuses streaming,
+    // push and extended-card calls for capabilities explicitly `Some(false)`
+    // in the handler, independent of the published card.
+    let capabilities = card.capabilities.clone();
+    let card = Arc::new(StaticAgentCard::new(card));
+    let handler = Arc::new(
+        DefaultRequestHandler::new(SkillExecutor::new(skill), InMemoryTaskStore::new())
+            .with_capabilities(capabilities),
+    );
+    let rpc = jsonrpc_router(handler);
+    let rpc_slash = rpc.clone();
     axum::Router::new()
-        .nest("/jsonrpc", jsonrpc_router(handler))
+        .nest("/jsonrpc", rpc)
+        // Same endpoint with a trailing slash: clients that join the
+        // advertised URL with "/" (e.g. the official A2A TCK's httpx client)
+        // otherwise get an empty 404. `nest` does not match that form.
+        .route(
+            "/jsonrpc/",
+            axum::routing::post(move |mut req: axum::extract::Request| async move {
+                *req.uri_mut() = axum::http::Uri::from_static("/");
+                tower::ServiceExt::oneshot(rpc_slash, req).await
+            }),
+        )
         .merge(agent_card_router(card))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         // Not `DefaultBodyLimit`: the SDK's `jsonrpc_router` sets its own
