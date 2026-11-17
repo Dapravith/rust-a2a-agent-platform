@@ -29,6 +29,8 @@ pub enum ApiError {
     NotFound,
     #[error("another workflow is already queued or running; wait for it to finish")]
     Busy,
+    #[error("Idempotency-Key was already used for a different question")]
+    IdempotencyKeyMismatch,
     #[error("request body too large")]
     TooLarge,
     #[error("service unavailable")]
@@ -39,6 +41,7 @@ impl From<DbError> for ApiError {
     fn from(e: DbError) -> Self {
         match e {
             DbError::ActiveWorkflowExists => ApiError::Busy,
+            DbError::IdempotencyKeyMismatch => ApiError::IdempotencyKeyMismatch,
             DbError::Sqlx(err) => {
                 // Details go to logs only, never to the client.
                 tracing::error!(error = %err, "database error");
@@ -54,6 +57,9 @@ impl IntoResponse for ApiError {
             ApiError::Validation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "validation_failed"),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::Busy => (StatusCode::CONFLICT, "workflow_active"),
+            ApiError::IdempotencyKeyMismatch => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "idempotency_key_mismatch")
+            }
             ApiError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
             ApiError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         };

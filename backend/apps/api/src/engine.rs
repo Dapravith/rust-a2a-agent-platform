@@ -24,12 +24,16 @@ pub struct Engine {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// `Display` is what clients see (stored in `workflow.error` / run `error`);
+/// it never includes database or internal details. `Debug` keeps the
+/// details and is only written to the server logs.
 enum StepError {
+    /// Already sanitized by [`crate::a2a::AgentError::safe_message`].
     #[error("{0}")]
     Agent(String),
-    #[error("{0}")]
+    #[error("internal error: database operation failed")]
     Db(#[from] DbError),
-    #[error("internal error: {0}")]
+    #[error("internal error")]
     Internal(String),
 }
 
@@ -83,7 +87,7 @@ impl Engine {
             Ok(verdict) => tracing::info!(outcome = "completed", verdict, "workflow finished"),
             Err(e) => {
                 let msg = e.to_string();
-                tracing::warn!(outcome = "failed", error = %msg, "workflow failed");
+                tracing::warn!(outcome = "failed", error = %msg, detail = ?e, "workflow failed");
                 if let Err(db_err) = db::fail_workflow(&self.pool, id, &msg).await {
                     tracing::error!(error = %db_err, "could not record workflow failure");
                 }
@@ -127,6 +131,8 @@ impl Engine {
     }
 
     /// One agent call: record the run, call over A2A, persist the artifact.
+    /// Once the run is recorded, *any* failure marks it `failed`, so a failed
+    /// workflow never shows a run stuck in `running`.
     async fn step<Req, Out>(
         &self,
         workflow_id: Uuid,
@@ -141,38 +147,67 @@ impl Engine {
         Out: serde::de::DeserializeOwned + serde::Serialize + contracts::Validate,
     {
         let run_id = db::start_run(&self.pool, workflow_id, agent).await?;
+        let result = self
+            .run_step(
+                workflow_id,
+                run_id,
+                agent,
+                endpoint,
+                artifact_name,
+                kind,
+                request,
+            )
+            .await;
+        if let Err(e) = &result {
+            tracing::warn!(agent, outcome = "failed", error = %e, detail = ?e, "agent step failed");
+            if let Err(db_err) = db::fail_run(&self.pool, run_id, &e.to_string()).await {
+                tracing::error!(agent, error = %db_err, "could not record agent run failure");
+            }
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_step<Req, Out>(
+        &self,
+        workflow_id: Uuid,
+        run_id: Uuid,
+        agent: &str,
+        endpoint: &AgentEndpoint,
+        artifact_name: &str,
+        kind: &str,
+        request: &Req,
+    ) -> Result<Out, StepError>
+    where
+        Req: serde::Serialize,
+        Out: serde::de::DeserializeOwned + serde::Serialize + contracts::Validate,
+    {
         let part = data_part(request).map_err(|e| StepError::Internal(e.to_string()))?;
         tracing::info!(agent, "calling agent over A2A");
-        match self
+        let outcome = self
             .gateway
             .call::<Out>(endpoint, part, artifact_name)
             .await
-        {
-            Ok(outcome) => {
-                let content = serde_json::to_value(&outcome.value)
-                    .map_err(|e| StepError::Internal(e.to_string()))?;
-                db::complete_run(
-                    &self.pool,
-                    workflow_id,
-                    run_id,
-                    db::RunResult {
-                        task_id: outcome.task_id.as_deref(),
-                        context_id: outcome.context_id.as_deref(),
-                        a2a_state: &outcome.state,
-                        kind,
-                        content: &content,
-                    },
-                )
-                .await?;
-                tracing::info!(agent, a2a_state = %outcome.state, outcome = "completed", "agent step done");
-                Ok(outcome.value)
-            }
-            Err(e) => {
-                let msg = format!("{agent}: {}", e.safe_message());
-                tracing::warn!(agent, outcome = "failed", error = %msg, "agent step failed");
-                db::fail_run(&self.pool, run_id, &msg).await?;
-                Err(StepError::Agent(msg))
-            }
-        }
+            .map_err(|e| {
+                tracing::warn!(agent, detail = %e, "A2A call failed");
+                StepError::Agent(format!("{agent}: {}", e.safe_message()))
+            })?;
+        let content =
+            serde_json::to_value(&outcome.value).map_err(|e| StepError::Internal(e.to_string()))?;
+        db::complete_run(
+            &self.pool,
+            workflow_id,
+            run_id,
+            db::RunResult {
+                task_id: outcome.task_id.as_deref(),
+                context_id: outcome.context_id.as_deref(),
+                a2a_state: &outcome.state,
+                kind,
+                content: &content,
+            },
+        )
+        .await?;
+        tracing::info!(agent, a2a_state = %outcome.state, outcome = "completed", "agent step done");
+        Ok(outcome.value)
     }
 }

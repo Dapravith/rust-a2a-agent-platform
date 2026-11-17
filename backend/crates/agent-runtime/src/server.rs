@@ -1,7 +1,8 @@
 //! A2A server plumbing shared by both agents, built on the official SDK.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use a2a::event::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use a2a::*;
@@ -12,6 +13,7 @@ use a2a_server::{
 };
 use contracts::{MEDIA_TYPE_JSON, Validate, data_part, decode_parts};
 use futures::StreamExt;
+use futures::future::{AbortHandle, Abortable};
 use futures::stream::{self, BoxStream};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -106,8 +108,29 @@ fn artifact(task_id: &str, context_id: &str, name: &str, part: Part) -> StreamRe
 }
 
 /// Adapts a [`Skill`] to the SDK's [`AgentExecutor`].
+///
+/// The SDK runs each execution in a detached task and its `CancelTask` only
+/// calls [`AgentExecutor::cancel`]; it does not stop that task. So the
+/// executor keeps an abort handle per running task and fires it on cancel,
+/// which drops the in-flight work (e.g. an LLM request).
 struct SkillExecutor<S> {
     skill: Arc<S>,
+    running: Arc<Mutex<HashMap<String, AbortHandle>>>,
+}
+
+impl<S> SkillExecutor<S> {
+    fn new(skill: S) -> Self {
+        Self {
+            skill: Arc::new(skill),
+            running: Arc::default(),
+        }
+    }
+}
+
+/// Poison only means another thread panicked mid-update of a plain map; the
+/// map itself is still usable, so recover instead of panicking.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 async fn run_skill<S: Skill>(
@@ -147,7 +170,20 @@ impl<S: Skill> AgentExecutor for SkillExecutor<S> {
         let (task_id, context_id) = ctx.task_info();
         let parts = ctx.message.map(|m| m.parts).unwrap_or_default();
         let working = status(&task_id, &context_id, TaskState::Working, None);
-        let work = run_skill(self.skill.clone(), parts, task_id, context_id);
+        let (abort, registration) = AbortHandle::new_pair();
+        lock(&self.running).insert(task_id.to_string(), abort);
+        let running = self.running.clone();
+        let key = task_id.to_string();
+        let work = Abortable::new(
+            run_skill(self.skill.clone(), parts, task_id, context_id),
+            registration,
+        );
+        let work = async move {
+            let result = work.await;
+            lock(&running).remove(&key);
+            // Aborted: the cancel path already reported the terminal state.
+            result.unwrap_or_default()
+        };
         Box::pin(
             stream::iter([Ok(working)]).chain(
                 stream::once(work).flat_map(|events| stream::iter(events.into_iter().map(Ok))),
@@ -157,6 +193,10 @@ impl<S: Skill> AgentExecutor for SkillExecutor<S> {
 
     fn cancel(&self, ctx: ExecutorContext) -> BoxStream<'static, Result<StreamResponse, A2AError>> {
         let (task_id, context_id) = ctx.task_info();
+        if let Some(abort) = lock(&self.running).remove(task_id.as_str()) {
+            abort.abort();
+            tracing::info!(task_id = %task_id, "task canceled; in-flight work aborted");
+        }
         let ev = status(&task_id, &context_id, TaskState::Canceled, None);
         Box::pin(stream::once(async move { Ok(ev) }))
     }
@@ -166,9 +206,7 @@ impl<S: Skill> AgentExecutor for SkillExecutor<S> {
 pub fn router<S: Skill>(skill: S, public_url: &str) -> axum::Router {
     let card = Arc::new(StaticAgentCard::new(skill.card(public_url)));
     let handler = Arc::new(DefaultRequestHandler::new(
-        SkillExecutor {
-            skill: Arc::new(skill),
-        },
+        SkillExecutor::new(skill),
         InMemoryTaskStore::new(),
     ));
     axum::Router::new()
