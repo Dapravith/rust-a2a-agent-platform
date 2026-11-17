@@ -43,8 +43,9 @@ The API never depends on agent code at runtime; agents never call each other.
 
 ## Local setup
 
-**Prerequisites:** Rust ≥ 1.94 (tested on 1.100.0), Node ≥ 22.12 (tested on 22.20.0) with npm,
-and Docker (for the local Postgres; or point `DATABASE_URL` at any Postgres 15+ / Supabase).
+**Prerequisites:** Rust ≥ 1.94 (tested on 1.100.0), Node ≥ 22.23.4 with npm (pinned to
+Node 24.21.0 LTS in `.nvmrc`; run `nvm use` in the repo root), and Docker (for the local Postgres;
+or point `DATABASE_URL` at any Postgres 15+ / Supabase).
 
 1. Start the local database:
 
