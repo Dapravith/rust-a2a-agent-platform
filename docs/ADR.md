@@ -29,3 +29,17 @@
 **Rationale:** Server rendering removes the browser → API JSON surface (the API and agents can stay on a private network), gives correct HTTP status codes for 404/503 states, and renders untrusted Markdown once, safely, on the server.
 
 **Trade-off / deployment implications:** One more runtime process (Node ≥ 22.23.4) next to the three Rust processes. The portal must reach the API (`API_ORIGIN`); its public host names must be listed at build time (`PORTAL_HOSTS`, for the Origin check). TLS, authentication and rate limiting still belong to the reverse proxy / P1, as before. `FRONTEND_DIR` must be unset (the Rust static-serving code is kept, unused, and can be removed later).
+### ADR-003: Human-supervised multi-agent engineering workflows (Phase 6, proposed extension)
+
+**Status:** Accepted for implementation as an *additive* extension. The P0 Worker → Reviewer workflow is unchanged and stays the verified path until the extension is independently verified.
+
+**Decision:** Add an engineering-workflow subsystem inside the existing modular monolith:
+- Pure domain rules in a new crate `crates/engineering` (state machine, role policies + tool allowlist, artifact contracts with integrity hashes, quality gates). No I/O, so every rule is unit-tested and applied identically on every path.
+- Persistence, orchestration, approval engine and `/api/eng` routes in `apps/api/src/eng/`. New tables (`eng_*`); artifacts, approvals and audit events are append-only (trigger + grants).
+- Roles are application policy, not A2A primitives. A2A stays the transport for remote agents; A2A task state is never treated as workflow or approval state.
+- Role agents are reached through a small `RoleAgent` adapter trait. Deterministic simulated agents (provider `simulation`) exist for Mode A tests only; `api serve` wires no agents and the `Disabled` authenticator, so engineering writes answer 503 until a real provider and an identity provider are configured. There is no fallback from a failing provider to the simulation.
+- Human gates (plan approval, delivery decision) can only be passed by an authenticated principal with the `approver` role from a server-side `Authenticator`; request bodies carry no identity. Decisions bind to the workflow version, the artifact hash under review and (delivery) the candidate commit SHA.
+
+**Rejected alternatives:** a workflow engine / message broker (not needed for one orchestrator per database); one microservice per role (roles are policy, agents are already independent processes when remote); storing model reasoning (only observable outputs are stored).
+
+**Consequences:** No new infrastructure. New risk surface: code execution by agents (M5) needs a real isolation boundary before any real provider is enabled; human approvals stay BLOCKED until an IdP (OIDC) is integrated.

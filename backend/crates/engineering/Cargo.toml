@@ -1,0 +1,19 @@
+[package]
+name = "engineering"
+description = "Phase 6 domain: engineering-workflow state machine, role policies, artifact contracts and quality gates (pure, no I/O)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+sha2 = "=0.10.9"
+hex = "=0.4.3"
+
+[lints]
+workspace = true

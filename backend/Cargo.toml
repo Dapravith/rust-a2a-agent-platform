@@ -6,6 +6,7 @@ members = [
     "apps/reviewer-agent",
     "crates/contracts",
     "crates/agent-runtime",
+    "crates/engineering",
 ]
 
 [workspace.package]
@@ -39,6 +40,7 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 
 contracts = { path = "crates/contracts" }
 agent-runtime = { path = "crates/agent-runtime" }
+engineering = { path = "crates/engineering" }
 worker-agent = { path = "apps/worker-agent" }
 reviewer-agent = { path = "apps/reviewer-agent" }
 

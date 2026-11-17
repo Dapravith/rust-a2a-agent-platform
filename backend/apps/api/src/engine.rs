@@ -7,6 +7,9 @@ use contracts::{
     DRAFT_ARTIFACT_NAME, DraftArtifact, REVIEW_ARTIFACT_NAME, REVIEWER_AGENT_NAME, ReviewArtifact,
     ReviewerRequest, Verdict, WORKER_AGENT_NAME, WorkerRequest, data_part,
 };
+use std::future::Future;
+use std::time::Duration;
+
 use sqlx::PgPool;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -67,6 +70,32 @@ impl From<DbError> for WorkflowFailure {
     }
 }
 
+const RECORD_FAILURE_ATTEMPTS: u32 = 10;
+const RECORD_FAILURE_MAX_DELAY: Duration = Duration::from_secs(10);
+
+/// Runs a failure-recording write, retrying only database (connection)
+/// errors with capped exponential backoff. State-transition errors are
+/// returned at once: the row is already terminal and must not be touched.
+async fn record_failure<F, Fut>(what: &'static str, mut write: F) -> Result<(), DbError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), DbError>>,
+{
+    let mut delay = Duration::from_millis(250);
+    let mut attempt = 1;
+    loop {
+        match write().await {
+            Err(DbError::Sqlx(e)) if attempt < RECORD_FAILURE_ATTEMPTS => {
+                tracing::warn!(what, attempt, error = %e, "could not record failure; retrying");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(RECORD_FAILURE_MAX_DELAY);
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 fn at(stage: &'static str) -> impl FnOnce(StepError) -> WorkflowFailure {
     move |error| WorkflowFailure {
         stage: Some(stage),
@@ -117,7 +146,8 @@ impl Engine {
             Ok(r) => r,
             Err(join) => Err(StepError::Internal(format!("workflow task aborted: {join}")).into()),
         };
-        let _guard = span.enter();
+        // Instrumented, not `span.enter()`: the guard must not be held across `.await`.
+        async move {
         match outcome {
             Ok(verdict) => tracing::info!(outcome = "completed", verdict, "workflow finished"),
             Err(f) => {
@@ -125,12 +155,18 @@ impl Engine {
                 let code = f.error.code();
                 tracing::warn!(outcome = "failed", error_code = %code, stage = f.stage,
                     error = %msg, detail = ?f.error, "workflow failed");
-                let failure = db::Failure {
-                    code,
-                    stage: f.stage,
-                    error: &msg,
+                let record = || {
+                    db::fail_workflow(
+                        &self.pool,
+                        id,
+                        db::Failure {
+                            code,
+                            stage: f.stage,
+                            error: &msg,
+                        },
+                    )
                 };
-                match db::fail_workflow(&self.pool, id, failure).await {
+                match record_failure("workflow", record).await {
                     Ok(()) => {}
                     // Already terminal: never overwrite a recorded outcome.
                     Err(e @ DbError::InvalidTransition { .. }) => {
@@ -140,6 +176,9 @@ impl Engine {
                 }
             }
         }
+        }
+        .instrument(span)
+        .await
     }
 
     async fn execute(&self, id: Uuid, question: String) -> Result<&'static str, WorkflowFailure> {
@@ -210,7 +249,9 @@ impl Engine {
         if let Err(e) = &result {
             tracing::warn!(agent, outcome = "failed", error_code = %e.code(), error = %e,
                 detail = ?e, "agent step failed");
-            if let Err(db_err) = db::fail_run(&self.pool, run_id, e.code(), &e.to_string()).await {
+            let msg = e.to_string();
+            let record = || db::fail_run(&self.pool, run_id, e.code(), &msg);
+            if let Err(db_err) = record_failure("agent run", record).await {
                 tracing::error!(agent, error = %db_err, "could not record agent run failure");
             }
         }

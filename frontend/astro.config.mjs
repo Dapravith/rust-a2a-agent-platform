@@ -6,7 +6,10 @@ import node from "@astrojs/node";
 // API_ORIGIN, so the API and the agents can stay on a private network.
 export default defineConfig({
   output: "server",
-  adapter: node({ mode: "standalone" }),
+  // The adapter's default request-body cap is 1 GiB. The only POST is the task
+  // form (question <= 4000 chars), so cap bodies at 64 KiB; this also covers
+  // chunked uploads, which carry no Content-Length for the page to check.
+  adapter: node({ mode: "standalone", bodySizeLimit: 64 * 1024 }),
   server: { host: "127.0.0.1", port: 4321 },
   build: { inlineStylesheets: "never" },
   security: {

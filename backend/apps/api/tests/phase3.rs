@@ -390,6 +390,48 @@ async fn database_outage_is_reported_safely(pool: PgPool) {
     assert_eq!(live.status(), 200);
 }
 
+/// Phase 5 regression: a database outage at the moment a failure is recorded
+/// must not leave the workflow active. Before the fix the single attempt to
+/// record `failed` was lost, the row stayed `running`, and every new
+/// submission was refused with 409 until the API restarted.
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn failure_is_recorded_after_a_transient_database_outage(pool: PgPool) {
+    // One connection: while the test holds it, every query times out, i.e.
+    // the database is unavailable to the engine.
+    let own = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(2))
+        .connect_lazy_with((*pool.connect_options()).clone());
+    // Open that connection first; connecting can be slow on a busy host.
+    for attempt in 1.. {
+        match own.acquire().await {
+            Ok(_) => break,
+            Err(e) if attempt < 15 => eprintln!("warm-up attempt {attempt}: {e}"),
+            Err(e) => panic!("cannot connect: {e}"),
+        }
+    }
+    let base = api(own.clone(), &hanging_worker().await, "http://127.0.0.1:2").await;
+    let r = submit(&base).await;
+    assert_eq!(r.status(), 202);
+    let id = r.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The worker hangs; the 5 s agent deadline (+ <= 5 s CancelTask) expires
+    // while the database is "down", so recording the failure hits the outage.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let outage = own.acquire().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(25)).await;
+    drop(outage);
+
+    let wf = wait_status(&base, &id, &["failed"]).await;
+    assert_eq!(wf["error_code"], "agent_timeout");
+    assert_eq!(wf["failed_stage"], "worker");
+    assert_eq!(wf["runs"][0]["status"], "failed");
+    // Capacity is released: the next submission is admitted, not 409.
+    assert_eq!(submit(&base).await.status(), 202);
+}
+
 // ---------------------------------------------------------------------------
 // P3-01: least-privilege runtime role
 // ---------------------------------------------------------------------------

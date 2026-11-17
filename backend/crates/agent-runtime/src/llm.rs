@@ -130,26 +130,30 @@ impl LlmConfig {
                 }
                 Ok(None)
             }
-            "anthropic" => {
-                let cfg = Self {
-                    api_key: env("ANTHROPIC_API_KEY")
-                        .ok_or("INFERENCE_MODE=anthropic requires ANTHROPIC_API_KEY")?,
-                    model: env("ANTHROPIC_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
-                    base_url: env("ANTHROPIC_BASE_URL")
-                        .unwrap_or_else(|| "https://api.anthropic.com".into()),
-                    timeout: Duration::from_secs(env_parse("LLM_TIMEOUT_SECS", 120)?),
-                    deadline: Duration::from_secs(env_parse("LLM_DEADLINE_SECS", 200)?),
-                    max_tokens: env_parse("LLM_MAX_TOKENS", 16_000)?,
-                    effort: env("LLM_EFFORT").unwrap_or_else(|| "medium".into()),
-                    refusal_fallback: env("ANTHROPIC_REFUSAL_FALLBACK").is_none_or(|v| v != "off"),
-                };
-                cfg.validate()?;
-                Ok(Some(cfg))
-            }
+            "anthropic" => Self::anthropic_from_env("INFERENCE_MODE=anthropic").map(Some),
             other => Err(format!(
                 "INFERENCE_MODE must be `mock` or `anthropic`, got `{other}`"
             )),
         }
+    }
+
+    /// The Anthropic settings from the environment, required and validated.
+    /// `why` names the setting that asked for them (for the error message).
+    pub fn anthropic_from_env(why: &str) -> Result<Self, String> {
+        let cfg = Self {
+            api_key: env("ANTHROPIC_API_KEY")
+                .ok_or_else(|| format!("{why} requires ANTHROPIC_API_KEY"))?,
+            model: env("ANTHROPIC_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
+            base_url: env("ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|| "https://api.anthropic.com".into()),
+            timeout: Duration::from_secs(env_parse("LLM_TIMEOUT_SECS", 120)?),
+            deadline: Duration::from_secs(env_parse("LLM_DEADLINE_SECS", 200)?),
+            max_tokens: env_parse("LLM_MAX_TOKENS", 16_000)?,
+            effort: env("LLM_EFFORT").unwrap_or_else(|| "medium".into()),
+            refusal_fallback: env("ANTHROPIC_REFUSAL_FALLBACK").is_none_or(|v| v != "off"),
+        };
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -220,6 +224,26 @@ pub struct MessagesResponse {
     pub content: Vec<ContentBlock>,
     #[serde(default)]
     pub stop_reason: Option<String>,
+    #[serde(default)]
+    pub usage: Option<UsageBlock>,
+}
+
+/// Token accounting reported by the provider (`usage`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct UsageBlock {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+}
+
+/// A validated-as-JSON structured output plus what it cost. The caller
+/// applies its own contract to `value`.
+#[derive(Debug, Clone)]
+pub struct Generated {
+    pub value: Value,
+    pub usage: Option<UsageBlock>,
+    pub model: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -312,9 +336,37 @@ impl LlmClient {
         user: &str,
         schema: Value,
     ) -> Result<T, LlmError> {
+        let resp = self.call(system, user, &schema).await?;
+        parse_message_response(resp)
+    }
+
+    /// Like [`Self::generate`], but returns the JSON value and the token
+    /// usage; the caller validates the value against its own contract.
+    pub async fn generate_json(
+        &self,
+        system: &str,
+        user: &str,
+        schema: Value,
+    ) -> Result<Generated, LlmError> {
+        let resp = self.call(system, user, &schema).await?;
+        let usage = resp.usage;
+        let value = parse_json_response(resp)?;
+        Ok(Generated {
+            value,
+            usage,
+            model: self.cfg.model.clone(),
+        })
+    }
+
+    async fn call(
+        &self,
+        system: &str,
+        user: &str,
+        schema: &Value,
+    ) -> Result<MessagesResponse, LlmError> {
         tokio::time::timeout(
             self.cfg.deadline,
-            self.generate_with_retries(system, user, &schema),
+            self.generate_with_retries(system, user, schema),
         )
         .await
         .unwrap_or(Err(LlmError::Deadline(self.cfg.deadline)))
@@ -338,12 +390,12 @@ impl LlmClient {
         }
     }
 
-    async fn generate_with_retries<T: DeserializeOwned + Validate>(
+    async fn generate_with_retries(
         &self,
         system: &str,
         user: &str,
         schema: &Value,
-    ) -> Result<T, LlmError> {
+    ) -> Result<MessagesResponse, LlmError> {
         let body = self.request(system, user, schema);
         let url = format!("{}/v1/messages", self.cfg.base_url.trim_end_matches('/'));
 
@@ -384,10 +436,8 @@ impl LlmClient {
                 })?;
 
             if status.is_success() {
-                let parsed: MessagesResponse = serde_json::from_slice(&bytes).map_err(|e| {
-                    LlmError::InvalidOutput(format!("malformed response body: {e}"))
-                })?;
-                return parse_message_response(parsed);
+                return serde_json::from_slice::<MessagesResponse>(&bytes)
+                    .map_err(|e| LlmError::InvalidOutput(format!("malformed response body: {e}")));
             }
 
             let message = self.provider_message(&bytes);
@@ -456,6 +506,17 @@ async fn read_limited(mut resp: reqwest::Response, limit: usize) -> Result<Vec<u
 pub fn parse_message_response<T: DeserializeOwned + Validate>(
     resp: MessagesResponse,
 ) -> Result<T, LlmError> {
+    let value = parse_json_response(resp)?;
+    let decoded: T =
+        serde_json::from_value(value).map_err(|e| LlmError::InvalidOutput(e.to_string()))?;
+    decoded
+        .validate()
+        .map_err(|e| LlmError::InvalidOutput(e.to_string()))?;
+    Ok(decoded)
+}
+
+/// Checks the stop reason and parses the text blocks as one JSON value.
+pub fn parse_json_response(resp: MessagesResponse) -> Result<Value, LlmError> {
     match resp.stop_reason.as_deref() {
         Some("refusal") => return Err(LlmError::Refused),
         Some("max_tokens") => return Err(LlmError::Truncated),
@@ -472,12 +533,7 @@ pub fn parse_message_response<T: DeserializeOwned + Validate>(
     if text.trim().is_empty() {
         return Err(LlmError::InvalidOutput("response had no text block".into()));
     }
-    let decoded: T =
-        serde_json::from_str(&text).map_err(|e| LlmError::InvalidOutput(e.to_string()))?;
-    decoded
-        .validate()
-        .map_err(|e| LlmError::InvalidOutput(e.to_string()))?;
-    Ok(decoded)
+    serde_json::from_str(&text).map_err(|e| LlmError::InvalidOutput(e.to_string()))
 }
 
 #[cfg(test)]

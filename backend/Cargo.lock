@@ -149,11 +149,14 @@ dependencies = [
  "axum",
  "chrono",
  "contracts",
+ "engineering",
  "futures",
+ "hex",
  "reqwest",
  "reviewer-agent",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror",
  "tokio",
@@ -640,6 +643,18 @@ dependencies = [
  "rustversion",
  "scopeguard",
  "simdutf8",
+]
+
+[[package]]
+name = "engineering"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]

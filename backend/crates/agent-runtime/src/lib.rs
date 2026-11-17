@@ -9,5 +9,5 @@
 pub mod llm;
 pub mod server;
 
-pub use llm::{LlmClient, LlmConfig, LlmError};
+pub use llm::{Generated, LlmClient, LlmConfig, LlmError, UsageBlock};
 pub use server::{ServeConfig, Skill, agent_card, init_tracing, router, serve};

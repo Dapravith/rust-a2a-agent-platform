@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use api::{app, config, config::Config, db, engine::Engine};
+use api::{config, config::Config, db, engine::Engine};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -61,16 +61,48 @@ async fn serve() -> Result<(), String> {
     if recovered > 0 {
         tracing::warn!(recovered, "marked interrupted workflows as failed");
     }
+    // Phase 6: in-flight engineering stages fail as `interrupted`; workflows
+    // waiting for a human decision are preserved as they are.
+    let eng_recovered = api::eng::store::recover_interrupted(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if eng_recovered > 0 {
+        tracing::warn!(
+            eng_recovered,
+            "marked interrupted engineering workflows as failed"
+        );
+    }
+    // Real providers come only from ENG_PROVIDER; simulation is never wired
+    // here. No identity provider is integrated yet, so the authenticator is
+    // `Disabled` and every `/api/eng` write answers 503 (BLOCKED).
+    let providers = api::eng::providers::from_env()?;
+    let orchestrator = providers.map(|p| {
+        let mut o = api::eng::orchestrator::Orchestrator::with_agents(pool.clone(), p.agents);
+        o.base_commit_sha = p.base_commit_sha;
+        for (role, id) in o.identities() {
+            tracing::info!(role = role.as_str(), provider = %id.provider, model = ?id.model, "engineering agent configured");
+        }
+        std::sync::Arc::new(o)
+    });
+    let eng = api::eng::routes::EngState {
+        pool: pool.clone(),
+        orchestrator,
+        auth: std::sync::Arc::new(api::eng::auth::Disabled),
+        budget: engineering::state::Budget::default(),
+    };
 
     let engine = Engine::new(pool, &cfg)?;
     let listener = tokio::net::TcpListener::bind(&cfg.bind)
         .await
         .map_err(|e| format!("cannot bind {}: {e}", cfg.bind))?;
     tracing::info!(bind = %cfg.bind, "api listening");
-    axum::serve(listener, app(engine, cfg.frontend_dir.as_deref()))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .map_err(|e| format!("server error: {e}"))
+    axum::serve(
+        listener,
+        api::app_with(engine, eng, cfg.frontend_dir.as_deref()),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .map_err(|e| format!("server error: {e}"))
 }
