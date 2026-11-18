@@ -46,6 +46,9 @@ pub struct RoleInput {
     /// Base commit of the repository, supplied by the orchestrator (from the
     /// workspace in M5, or configuration). Never invented by an agent.
     pub base_commit_sha: Option<String>,
+    /// The workflow's MCP workspace (created by the MCP server, recorded in
+    /// `eng_workspaces`). Set only for MCP-backed adapters.
+    pub workspace_id: Option<Uuid>,
     /// The exact candidate diff, read from the isolated workspace (M5).
     /// `None` until a real workspace exists.
     pub patch: Option<String>,

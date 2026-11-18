@@ -79,6 +79,7 @@ async fn serve() -> Result<(), String> {
     let orchestrator = providers.map(|p| {
         let mut o = api::eng::orchestrator::Orchestrator::with_agents(pool.clone(), p.agents);
         o.base_commit_sha = p.base_commit_sha;
+        o.mcp_control = p.mcp_control;
         for (role, id) in o.identities() {
             tracing::info!(role = role.as_str(), provider = %id.provider, model = ?id.model, "engineering agent configured");
         }

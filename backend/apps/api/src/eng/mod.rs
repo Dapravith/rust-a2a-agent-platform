@@ -9,6 +9,7 @@ pub mod a2a_role;
 pub mod agents;
 pub mod approval;
 pub mod auth;
+pub mod mcp_control;
 pub mod orchestrator;
 pub mod providers;
 pub mod routes;

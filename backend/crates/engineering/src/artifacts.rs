@@ -153,6 +153,10 @@ pub struct RequirementsPlan {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub risks: Vec<String>,
+    /// Contract v2 (additive, B7): what the plan explicitly will not do.
+    /// Absent in older plans → empty.
+    #[serde(default)]
+    pub non_goals: Vec<String>,
     pub steps: Vec<String>,
     /// Repository path prefixes the change may touch (proposed; becomes
     /// binding only once a human approves the plan).
@@ -190,7 +194,13 @@ impl Contract for RequirementsPlan {
         }
         check_len("dependencies", &self.dependencies, 0, 20)?;
         check_len("risks", &self.risks, 0, 20)?;
-        for t in self.dependencies.iter().chain(&self.risks) {
+        check_len("non_goals", &self.non_goals, 0, 20)?;
+        for t in self
+            .dependencies
+            .iter()
+            .chain(&self.risks)
+            .chain(&self.non_goals)
+        {
             check_text("dependencies/risks[]", t, 1, 500)?;
         }
         check_len("steps", &self.steps, 1, 30)?;

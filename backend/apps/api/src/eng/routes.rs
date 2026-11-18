@@ -217,9 +217,12 @@ async fn detail(
         .as_ref()
         .map(|_| approval::evaluate_gates(&d.workflow, &d.artifacts));
     let awaiting = d.workflow.status().ok().and_then(approval::awaiting);
+    let tool_calls = store::tool_calls_for(&s.pool, id).await?;
+    let workspace = store::workspace_for(&s.pool, id).await?;
     Ok(Json(json!({
         "workflow": d.workflow, "awaiting_decision": awaiting, "gates": gates,
         "runs": d.runs, "artifacts": d.artifacts, "approvals": d.approvals, "audit": d.audit,
+        "tool_calls": tool_calls, "workspace_id": workspace,
     })))
 }
 

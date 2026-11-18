@@ -776,6 +776,70 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<Detail, StoreError> {
     })
 }
 
+/// The MCP workspace recorded for a workflow, if any.
+pub async fn workspace_for(pool: &PgPool, workflow_id: Uuid) -> Result<Option<Uuid>, StoreError> {
+    Ok(
+        sqlx::query_scalar("SELECT workspace_id FROM eng_workspaces WHERE workflow_id = $1")
+            .bind(workflow_id)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
+/// Records the workspace the MCP server created. First writer wins; the
+/// returned id is the one on record.
+pub async fn record_workspace(
+    pool: &PgPool,
+    workflow_id: Uuid,
+    workspace_id: Uuid,
+    base_sha: &str,
+) -> Result<Uuid, StoreError> {
+    sqlx::query(
+        "INSERT INTO eng_workspaces (workflow_id, workspace_id, base_sha) VALUES ($1, $2, $3) \
+         ON CONFLICT (workflow_id) DO NOTHING",
+    )
+    .bind(workflow_id)
+    .bind(workspace_id)
+    .bind(base_sha)
+    .execute(pool)
+    .await?;
+    workspace_for(pool, workflow_id)
+        .await?
+        .ok_or(StoreError::NotFound)
+}
+
+/// One MCP audit row as shown to humans (no arguments, no results: digests only).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ToolCallView {
+    pub id: Uuid,
+    pub at: DateTime<Utc>,
+    pub run_id: Option<Uuid>,
+    pub role: Option<String>,
+    pub agent_id: Option<String>,
+    pub tool: String,
+    pub target: Option<String>,
+    pub outcome: String,
+    pub error_code: Option<String>,
+    pub head_sha: Option<String>,
+    pub patch_sha256: Option<String>,
+    pub exit_code: Option<i32>,
+    pub duration_ms: i64,
+}
+
+pub async fn tool_calls_for(
+    pool: &PgPool,
+    workflow_id: Uuid,
+) -> Result<Vec<ToolCallView>, StoreError> {
+    Ok(sqlx::query_as::<_, ToolCallView>(
+        "SELECT id, at, run_id, role, agent_id, tool, target, outcome, error_code, head_sha, \
+         patch_sha256, exit_code, duration_ms FROM eng_tool_calls \
+         WHERE workflow_id = $1 ORDER BY at, id LIMIT 500",
+    )
+    .bind(workflow_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// One MCP audit row, as the orchestrator needs it to verify evidence.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ToolCallRow {
@@ -786,13 +850,15 @@ pub struct ToolCallRow {
     pub outcome: String,
     pub head_sha: Option<String>,
     pub exit_code: Option<i32>,
+    pub target: Option<String>,
+    pub patch_sha256: Option<String>,
 }
 
 /// Audit rows for the given ids (written by the MCP server, read-only here).
 pub async fn tool_calls(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<ToolCallRow>, StoreError> {
     Ok(sqlx::query_as::<_, ToolCallRow>(
-        "SELECT id, run_id, role, tool, outcome, head_sha, exit_code \
-         FROM eng_tool_calls WHERE id = ANY($1)",
+        "SELECT id, run_id, role, tool, outcome, head_sha, exit_code, target, patch_sha256 \
+         FROM eng_tool_calls WHERE id = ANY($1) ORDER BY at, id",
     )
     .bind(ids)
     .fetch_all(pool)

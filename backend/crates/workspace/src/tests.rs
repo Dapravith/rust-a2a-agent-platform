@@ -335,3 +335,49 @@ async fn apply_patch_refuses_other_branches_and_bases() {
     assert_eq!(e.code(), "protected_branch");
     assert_eq!(f.workspace.head_sha().await.unwrap(), f.candidate_sha);
 }
+
+// ---------------------------------------------------------------------------
+// Workspace creation (B2)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_from_source_checks_out_the_base_without_a_remote() {
+    let src_root = tempfile::tempdir().unwrap();
+    let (src, base) = fixture::create_base(src_root.path(), uuid::Uuid::now_v7())
+        .await
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let ws = Workspace::create_from(root.path(), src.dir(), &base)
+        .await
+        .unwrap();
+    assert_eq!(ws.head_sha().await.unwrap(), base);
+    assert!(git::run(ws.dir(), &["remote"]).await.unwrap().is_empty());
+    // The developer can then branch and commit from it.
+    let branch = engineering::roles::candidate_branch(uuid::Uuid::now_v7());
+    let patch = fixture::candidate_patch().await.unwrap();
+    ws.apply_patch(&base, &branch, &patch, "x", &scope())
+        .await
+        .unwrap();
+    // The source is untouched.
+    assert_eq!(src.head_sha().await.unwrap(), base);
+}
+
+#[tokio::test]
+async fn create_from_refuses_unknown_or_short_bases_and_leaves_nothing_behind() {
+    let src_root = tempfile::tempdir().unwrap();
+    let (src, base) = fixture::create_base(src_root.path(), uuid::Uuid::now_v7())
+        .await
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        Workspace::create_from(root.path(), src.dir(), &"0".repeat(40))
+            .await
+            .is_err()
+    );
+    assert!(
+        Workspace::create_from(root.path(), src.dir(), &base[..12])
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}

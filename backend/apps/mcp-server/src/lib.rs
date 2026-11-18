@@ -51,6 +51,9 @@ pub struct McpState {
     /// One lock per workspace, held for the whole call: reads, diffs, test runs
     /// and patches on one workspace never interleave (no check-then-use races).
     pub locks: WorkspaceLocks,
+    /// Repository new workspaces are cloned from (`MCP_SOURCE_REPO`). `None`
+    /// disables workspace creation.
+    pub source_repo: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -82,9 +85,71 @@ pub fn router(state: Arc<McpState>) -> axum::Router {
         Default::default(),
         cfg,
     );
-    axum::Router::new()
-        .nest_service("/mcp", svc)
-        .layer(axum::middleware::from_fn_with_state(state, authenticate))
+    let mcp =
+        axum::Router::new()
+            .nest_service("/mcp", svc)
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                authenticate,
+            ));
+    // Control plane for the orchestrator only (its own token domain); not MCP,
+    // not reachable with an agent token.
+    let control = axum::Router::new()
+        .route("/control/workspaces", axum::routing::post(create_workspace))
+        .layer(axum::extract::DefaultBodyLimit::max(1024))
+        .with_state(state);
+    mcp.merge(control)
+}
+
+/// `POST /control/workspaces` with `Authorization: Bearer <control token>`:
+/// creates the workflow's workspace at the token's base from the configured
+/// source repository and returns its server-chosen id.
+async fn create_workspace(State(state): State<Arc<McpState>>, req: Request) -> Response {
+    let token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let claims = match token.map(|t| engineering::mcp::verify_control_token(&state.key, t, now())) {
+        Some(Ok(c)) => c,
+        other => {
+            let code = match other {
+                None => "control_token_missing",
+                Some(Err(engineering::mcp::TokenError::Expired)) => "control_token_expired",
+                _ => "control_token_invalid",
+            };
+            if let Err(e) = state
+                .audit
+                .record(ToolCallRecord::refused_transport(code))
+                .await
+            {
+                tracing::error!(error = %e, "audit write failed for refused control request");
+            }
+            return (StatusCode::UNAUTHORIZED, axum::Json(json!({"error": code}))).into_response();
+        }
+    };
+    let Some(source) = state.source_repo.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "source_unconfigured"})),
+        )
+            .into_response();
+    };
+    match Workspace::create_from(&state.workspaces_root, source, &claims.base_sha).await {
+        Ok(ws) => {
+            tracing::info!(workflow_id = %claims.workflow_id, workspace_id = %ws.id(), "workspace created");
+            (
+                StatusCode::CREATED,
+                axum::Json(json!({"workspace_id": ws.id(), "base_sha": claims.base_sha})),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            axum::Json(json!({"error": e.code(), "message": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// HTTP-edge token check. On success the verified claims are attached to the
@@ -203,6 +268,8 @@ struct Executed {
     value: Value,
     head_sha: Option<String>,
     exit_code: Option<i32>,
+    /// For diffs and patches: SHA-256 of `git diff <base>..HEAD`.
+    patch_sha256: Option<String>,
 }
 
 impl McpServer {
@@ -222,6 +289,7 @@ impl McpServer {
                     .await
                     .map_err(|e| (e.code(), e.to_string()))?;
                 Ok(Executed {
+                    patch_sha256: None,
                     head_sha: Some(f.head_sha.clone()),
                     exit_code: None,
                     value: serde_json::to_value(f).unwrap_or(Value::Null),
@@ -233,6 +301,7 @@ impl McpServer {
                     .await
                     .map_err(|e| (e.code(), e.to_string()))?;
                 Ok(Executed {
+                    patch_sha256: Some(d.patch_sha256.clone()),
                     head_sha: Some(d.head_sha.clone()),
                     exit_code: None,
                     value: serde_json::to_value(d).unwrap_or(Value::Null),
@@ -248,6 +317,7 @@ impl McpServer {
                     .await
                     .map_err(|e| (e.code(), e.to_string()))?;
                 Ok(Executed {
+                    patch_sha256: None,
                     head_sha: Some(o.head_sha.clone()),
                     exit_code: o.exit_code,
                     value: serde_json::to_value(o).unwrap_or(Value::Null),
@@ -265,6 +335,7 @@ impl McpServer {
                     .await
                     .map_err(|e| (e.code(), e.to_string()))?;
                 Ok(Executed {
+                    patch_sha256: Some(r.patch_sha256.clone()),
                     head_sha: Some(r.head_sha.clone()),
                     exit_code: None,
                     value: serde_json::to_value(r).unwrap_or(Value::Null),
@@ -325,6 +396,7 @@ impl ServerHandler for McpServer {
                         }
                         rec.outcome = Outcome::Allowed;
                         rec.head_sha = ex.head_sha;
+                        rec.patch_sha256 = ex.patch_sha256;
                         rec.exit_code = ex.exit_code;
                         rec.result_sha256 = Some(sha256_hex(ex.value.to_string().as_bytes()));
                         CallToolResult::structured(ex.value)
