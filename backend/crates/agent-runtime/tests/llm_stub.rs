@@ -279,9 +279,9 @@ async fn oversized_response_is_rejected() {
 
 #[tokio::test]
 async fn unreachable_provider_is_typed() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
+    // Port 1 is privileged: nothing listens there and no test can bind it, so
+    // the connection is refused (bind-then-drop races with parallel tests).
+    let base = "http://127.0.0.1:1".to_string();
     let err = generate(config(base)).await.unwrap_err();
     assert_eq!(err.code(), AgentFailureCode::LlmUnavailable, "{err:?}");
     assert!(!err.to_string().contains("127.0.0.1"), "{err}");

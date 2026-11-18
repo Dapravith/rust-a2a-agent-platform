@@ -1,18 +1,3 @@
-//! First real provider: the Anthropic Messages API (structured JSON output),
-//! via the existing `agent_runtime::LlmClient` (raw HTTP: Rust has no
-//! official Anthropic SDK).
-//!
-//! **Capability boundary.** This is an LLM API, not a coding-agent runtime:
-//! it has no tools here, executes nothing and cannot touch a repository. It
-//! therefore serves only the roles that produce documents from evidence
-//! (Project Manager, Project Coordinator, Code Reviewer, Quality Lead).
-//! Developer and QA Tester need code execution in an isolated workspace
-//! (M5) and are refused at construction.
-//!
-//! Facts are never taken from the model: the base commit (Coordinator) and
-//! the candidate commit (Reviewer, Quality Lead) are written by the adapter
-//! from orchestrator input, and the orchestrator validates everything again.
-
 use agent_runtime::{LlmClient, LlmError};
 use engineering::artifacts::ArtifactKind;
 use engineering::roles::{ALLOWED_CHECKS, Role};

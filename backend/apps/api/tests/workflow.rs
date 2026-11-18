@@ -40,6 +40,11 @@ async fn bind() -> (tokio::net::TcpListener, String) {
     (l, url)
 }
 
+/// A loopback URL that refuses connections. Port 1 is privileged, so no test
+/// server (they all bind ephemeral ports unprivileged) can ever be handed it —
+/// unlike bind-then-drop, which races with parallel tests' `bind(0)` calls.
+const CLOSED_URL: &str = "http://127.0.0.1:1";
+
 async fn real_worker() -> String {
     let (l, url) = bind().await;
     serve(worker_agent::router(&url, None), l).await;
@@ -607,9 +612,7 @@ async fn timeout_cancels_the_agent_task(pool: PgPool) {
 
 #[sqlx::test(migrator = "api::db::MIGRATOR")]
 async fn unavailable_agent_fails_workflow(pool: PgPool) {
-    // Bind then drop to obtain a closed port.
-    let (l, url) = bind().await;
-    drop(l);
+    let url = CLOSED_URL.to_string();
     expect_worker_failure(pool, url, SECS_5, "unreachable").await;
 }
 
@@ -675,8 +678,7 @@ async fn expect_reviewer_failure(pool: PgPool, reviewer: String, needle: &str) {
 
 #[sqlx::test(migrator = "api::db::MIGRATOR")]
 async fn reviewer_unavailable_preserves_draft(pool: PgPool) {
-    let (l, url) = bind().await;
-    drop(l);
+    let url = CLOSED_URL.to_string();
     expect_reviewer_failure(pool, url, "unreachable").await;
 }
 
