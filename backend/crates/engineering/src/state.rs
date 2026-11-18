@@ -29,8 +29,11 @@ pub enum Status {
     Executing,
     /// Code Reviewer is reviewing the exact candidate commit.
     Reviewing,
-    /// QA Tester and then Quality Lead work on the same candidate.
+    /// QA Tester tests the exact candidate.
     Testing,
+    /// Quality Lead assesses the review and QA evidence (Phase 6B B7: was part
+    /// of `testing`; separate so supervision shows who is running).
+    QualityAssessment,
     AwaitingDeliveryApproval,
     /// Human asked for changes; Coordinator re-assigns (bounded).
     ChangesRequested,
@@ -41,13 +44,14 @@ pub enum Status {
 }
 
 impl Status {
-    pub const ALL: [Status; 12] = [
+    pub const ALL: [Status; 13] = [
         Status::Draft,
         Status::AwaitingPlanApproval,
         Status::ApprovedForExecution,
         Status::Executing,
         Status::Reviewing,
         Status::Testing,
+        Status::QualityAssessment,
         Status::AwaitingDeliveryApproval,
         Status::ChangesRequested,
         Status::ApprovedForDelivery,
@@ -64,6 +68,7 @@ impl Status {
             Status::Executing => "executing",
             Status::Reviewing => "reviewing",
             Status::Testing => "testing",
+            Status::QualityAssessment => "quality_assessment",
             Status::AwaitingDeliveryApproval => "awaiting_delivery_approval",
             Status::ChangesRequested => "changes_requested",
             Status::ApprovedForDelivery => "approved_for_delivery",
@@ -106,8 +111,8 @@ impl Status {
             }
             Status::Executing => Some(Role::Developer),
             Status::Reviewing => Some(Role::CodeReviewer),
-            // QA first, then the Quality Lead; the orchestrator sequences both.
             Status::Testing => Some(Role::QaTester),
+            Status::QualityAssessment => Some(Role::QualityLead),
             _ => None,
         }
     }
@@ -122,6 +127,7 @@ pub enum Event {
     WorkAssigned,
     CandidateProduced,
     ReviewRecorded,
+    QaRecorded,
     EvidenceAssessed,
     DeliveryApproved,
     DeliveryChangesRequested,
@@ -139,6 +145,7 @@ impl Event {
             Event::WorkAssigned => "work_assigned",
             Event::CandidateProduced => "candidate_produced",
             Event::ReviewRecorded => "review_recorded",
+            Event::QaRecorded => "qa_recorded",
             Event::EvidenceAssessed => "evidence_assessed",
             Event::DeliveryApproved => "delivery_approved",
             Event::DeliveryChangesRequested => "delivery_changes_requested",
@@ -154,6 +161,7 @@ impl Event {
             Event::WorkAssigned => Required::Agent(Role::ProjectCoordinator),
             Event::CandidateProduced => Required::Agent(Role::Developer),
             Event::ReviewRecorded => Required::Agent(Role::CodeReviewer),
+            Event::QaRecorded => Required::Agent(Role::QaTester),
             Event::EvidenceAssessed => Required::Agent(Role::QualityLead),
             Event::PlanApproved
             | Event::PlanChangesRequested
@@ -319,7 +327,8 @@ pub fn next(
         (ChangesRequested, Event::WorkAssigned) => Executing,
         (Executing, Event::CandidateProduced) => Reviewing,
         (Reviewing, Event::ReviewRecorded) => Testing,
-        (Testing, Event::EvidenceAssessed) => AwaitingDeliveryApproval,
+        (Testing, Event::QaRecorded) => QualityAssessment,
+        (QualityAssessment, Event::EvidenceAssessed) => AwaitingDeliveryApproval,
         (AwaitingDeliveryApproval, Event::DeliveryApproved) => ApprovedForDelivery,
         (AwaitingDeliveryApproval, Event::DeliveryRejected) => Rejected,
         (AwaitingDeliveryApproval, Event::DeliveryChangesRequested) => {
@@ -397,8 +406,37 @@ mod tests {
             (Event::WorkAssigned, agent(Role::ProjectCoordinator)),
             (Event::CandidateProduced, agent(Role::Developer)),
             (Event::ReviewRecorded, agent(Role::CodeReviewer)),
+            (Event::QaRecorded, agent(Role::QaTester)),
             (Event::EvidenceAssessed, agent(Role::QualityLead)),
         ]
+    }
+
+    #[test]
+    fn quality_lead_runs_only_after_qa_and_only_qa_records_qa() {
+        let b = Budget::default();
+        let testing = run(&happy_until_delivery()[..5]).unwrap();
+        assert_eq!(testing.status, Status::Testing);
+        assert_eq!(testing.status.active_role(), Some(Role::QaTester));
+        assert!(matches!(
+            next(
+                &testing,
+                Event::EvidenceAssessed,
+                &agent(Role::QualityLead),
+                &b
+            ),
+            Err(TransitionError::NotAllowed { .. })
+        ));
+        for r in [Role::Developer, Role::CodeReviewer, Role::QualityLead] {
+            assert!(matches!(
+                next(&testing, Event::QaRecorded, &agent(r), &b),
+                Err(TransitionError::Unauthorized { .. })
+            ));
+        }
+        let qa = next(&testing, Event::QaRecorded, &agent(Role::QaTester), &b).unwrap();
+        assert_eq!(qa.status, Status::QualityAssessment);
+        assert_eq!(qa.status.active_role(), Some(Role::QualityLead));
+        assert!(qa.status.is_agent_active());
+        assert_eq!(recovery_event(qa.status), Some(Event::Fail));
     }
 
     #[test]
@@ -409,7 +447,8 @@ mod tests {
         ev.push((Event::DeliveryApproved, approver()));
         let s = run(&ev).unwrap();
         assert_eq!(s.status, Status::ApprovedForDelivery);
-        assert_eq!(s.version, 8);
+        // 7 transitions to the delivery gate (incl. B7 `qa_recorded`) + approval.
+        assert_eq!(s.version, 9);
     }
 
     #[test]

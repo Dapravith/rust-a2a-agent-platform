@@ -38,6 +38,8 @@ pub struct Orchestrator {
     /// Repository base commit for work assignments (configuration until the
     /// M5 workspace provides it).
     pub base_commit_sha: Option<String>,
+    /// MCP control client; needed by MCP-backed adapters (workspace creation).
+    pub mcp_control: Option<Arc<super::mcp_control::McpControl>>,
 }
 
 enum StageError {
@@ -82,6 +84,7 @@ impl Orchestrator {
             stage_timeout: Duration::from_secs(600),
             max_attempts: 2,
             base_commit_sha: None,
+            mcp_control: None,
         }
     }
 
@@ -168,6 +171,18 @@ impl Orchestrator {
             };
             let mut input = build_input(wf, role, attempt, run_id, correlation_id, arts);
             input.base_commit_sha = self.base_commit_sha.clone();
+            if agent.requires_tool_evidence() {
+                match self.workspace(wf, arts).await {
+                    Ok(id) => input.workspace_id = Some(id),
+                    Err((code, msg)) => {
+                        store::fail_run(&self.pool, wf.id, run_id, code, &msg).await?;
+                        return Err(StageError::Fail(
+                            code,
+                            format!("{} stage: {msg}", role.as_str()),
+                        ));
+                    }
+                }
+            }
             let result = tokio::time::timeout(self.stage_timeout, agent.run(input)).await;
             let (code, msg, retryable) = match result {
                 Err(_) => (
@@ -185,7 +200,7 @@ impl Orchestrator {
                 },
                 Ok(Ok(out)) => match self.validate(wf, role, &ident, &out, arts) {
                     Ok(v) => match self
-                        .verify_tool_evidence(wf, role, run_id, agent.as_ref(), &out)
+                        .verify_tool_evidence(wf, role, run_id, agent.as_ref(), &out, arts)
                         .await
                     {
                         Ok(()) => {
@@ -318,7 +333,7 @@ impl Orchestrator {
                 }
                 match role {
                     Role::CodeReviewer => Some(Event::ReviewRecorded),
-                    Role::QaTester => None,
+                    Role::QaTester => Some(Event::QaRecorded),
                     _ => Some(Event::EvidenceAssessed),
                 }
             }
@@ -328,6 +343,35 @@ impl Orchestrator {
             commit_sha,
             event,
         })
+    }
+
+    /// The workflow's MCP workspace: the recorded one, or a new one created by
+    /// the MCP server at the **human-approved work assignment's** base commit.
+    async fn workspace(
+        &self,
+        wf: &EngWorkflow,
+        arts: &[EngArtifact],
+    ) -> Result<Uuid, (EngErrorCode, String)> {
+        let internal = |e: StoreError| (EngErrorCode::InternalError, e.to_string());
+        if let Some(id) = store::workspace_for(&self.pool, wf.id)
+            .await
+            .map_err(internal)?
+        {
+            return Ok(id);
+        }
+        let control = self.mcp_control.as_ref().ok_or((
+            EngErrorCode::ProviderUnconfigured,
+            "MCP control is not configured, so no workspace can be created".to_owned(),
+        ))?;
+        let a: WorkAssignment = decode(store::latest(arts, ArtifactKind::WorkAssignment))
+            .ok_or((EngErrorCode::InternalError, "no work assignment".to_owned()))?;
+        let id = control
+            .create_workspace(wf.id, &a.base_commit_sha)
+            .await
+            .map_err(|e| (EngErrorCode::AgentUnavailable, e))?;
+        store::record_workspace(&self.pool, wf.id, id, &a.base_commit_sha)
+            .await
+            .map_err(internal)
     }
 
     /// Cross-checks the MCP tool calls an output cites against the MCP
@@ -343,6 +387,7 @@ impl Orchestrator {
         run_id: Uuid,
         agent: &dyn RoleAgent,
         out: &AgentOutput,
+        arts: &[EngArtifact],
     ) -> Result<(), (EngErrorCode, String)> {
         let required = agent.requires_tool_evidence();
         if out.tool_calls.is_empty() && !required {
@@ -383,6 +428,7 @@ impl Orchestrator {
             }
         }
         let needed = match role {
+            Role::Developer => Some("workspace.apply_patch"),
             Role::CodeReviewer => Some("repository.diff"),
             Role::QaTester => Some("testing.run"),
             _ => None,
@@ -394,6 +440,55 @@ impl Orchestrator {
                 "no audited `{tool}` call backs this {}",
                 role.as_str()
             )));
+        }
+        // B4: code facts must equal what the MCP server computed, not what the agent says.
+        match role {
+            Role::Developer => {
+                if let Some(last) = rows
+                    .iter()
+                    .rev()
+                    .find(|r| r.tool == "workspace.apply_patch")
+                {
+                    let c: CodeCandidate = artifacts::decode(&out.content)
+                        .map_err(|e| (EngErrorCode::ArtifactInvalid, e.to_string()))?;
+                    if last.head_sha.as_deref() != Some(c.commit_sha.as_str()) {
+                        return Err(bad(
+                            "candidate commit differs from the audited workspace commit".into(),
+                        ));
+                    }
+                    if last.patch_sha256.as_deref() != Some(c.patch_sha256.as_str()) {
+                        return Err(bad(
+                            "candidate patch digest differs from the audited diff".into()
+                        ));
+                    }
+                    let reported: std::collections::BTreeSet<&str> =
+                        c.changed_files.iter().map(|f| f.path.as_str()).collect();
+                    let applied = last.target.as_deref().unwrap_or_default();
+                    if applied
+                        .split(',')
+                        .filter(|p| !p.is_empty())
+                        .any(|p| !reported.contains(p))
+                    {
+                        return Err(bad(
+                            "candidate does not report every file the patch changed".into(),
+                        ));
+                    }
+                }
+            }
+            Role::CodeReviewer => {
+                let expected = candidate
+                    .and_then(|sha| store::latest_for(arts, ArtifactKind::CodeCandidate, sha))
+                    .and_then(|a| a.content["patch_sha256"].as_str().map(str::to_owned));
+                if let Some(expected) = expected
+                    && rows
+                        .iter()
+                        .filter(|r| r.tool == "repository.diff")
+                        .any(|r| r.patch_sha256.as_deref() != Some(expected.as_str()))
+                {
+                    return Err(bad("the reviewed diff is not the candidate's patch".into()));
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -504,20 +599,9 @@ impl Orchestrator {
     }
 }
 
-/// QA runs first in `testing`; once a QA report exists for the candidate,
-/// the Quality Lead runs.
-fn next_role(status: Status, wf: &EngWorkflow, arts: &[EngArtifact]) -> Role {
-    if status == Status::Testing {
-        let qa_done = wf
-            .candidate_commit_sha
-            .as_deref()
-            .is_some_and(|sha| store::latest_for(arts, ArtifactKind::QaReport, sha).is_some());
-        return if qa_done {
-            Role::QualityLead
-        } else {
-            Role::QaTester
-        };
-    }
+/// The role whose run moves the workflow out of `status` (B7: QA in
+/// `testing`, Quality Lead in `quality_assessment`).
+fn next_role(status: Status, _wf: &EngWorkflow, _arts: &[EngArtifact]) -> Role {
     status.active_role().unwrap_or(Role::ProjectCoordinator)
 }
 
@@ -568,6 +652,7 @@ fn build_input(
         scope,
         candidate_commit_sha: candidate,
         base_commit_sha: None,
+        workspace_id: None,
         patch: None,
     }
 }

@@ -234,6 +234,65 @@ impl<S: Skill> AgentExecutor for SkillExecutor<S> {
     }
 }
 
+/// Data-part fields that must never be stored in, or returned from, the
+/// agent's task history (`GetTask`/`ListTasks`). The executor still receives
+/// the original request message (the SDK passes it directly).
+pub const REDACTED_FIELDS: &[&str] = &["mcp_token"];
+
+fn redact_message(m: &mut Message) {
+    for p in &mut m.parts {
+        if let PartContent::Data(serde_json::Value::Object(o)) = &mut p.content {
+            for f in REDACTED_FIELDS {
+                o.remove(*f);
+            }
+        }
+    }
+}
+
+fn redact(mut task: Task) -> Task {
+    if let Some(h) = &mut task.history {
+        h.iter_mut().for_each(redact_message);
+    }
+    if let Some(m) = &mut task.status.message {
+        redact_message(m);
+    }
+    task
+}
+
+/// [`InMemoryTaskStore`] that strips [`REDACTED_FIELDS`] before saving.
+pub struct RedactingTaskStore(InMemoryTaskStore);
+
+impl RedactingTaskStore {
+    pub fn new() -> Self {
+        RedactingTaskStore(InMemoryTaskStore::new())
+    }
+}
+
+impl Default for RedactingTaskStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl a2a_server::TaskStore for RedactingTaskStore {
+    async fn create(&self, task: Task) -> Result<a2a_server::task_store::TaskVersion, A2AError> {
+        self.0.create(redact(task)).await
+    }
+    async fn update(&self, task: Task) -> Result<a2a_server::task_store::TaskVersion, A2AError> {
+        self.0.update(redact(task)).await
+    }
+    async fn get(&self, task_id: &str) -> Result<Option<Task>, A2AError> {
+        self.0.get(task_id).await
+    }
+    async fn list(&self, req: &ListTasksRequest) -> Result<ListTasksResponse, A2AError> {
+        self.0.list(req).await
+    }
+    async fn begin_cancel(&self, task_id: &str) -> Result<Task, A2AError> {
+        self.0.begin_cancel(task_id).await
+    }
+}
+
 /// Largest JSON-RPC request an agent accepts. The biggest valid payload (a
 /// review request: 4k question + 20k draft + metadata) is well below this.
 pub const MAX_AGENT_BODY_BYTES: usize = 256 * 1024;
@@ -247,7 +306,7 @@ pub fn router<S: Skill>(skill: S, public_url: &str) -> axum::Router {
     let capabilities = card.capabilities.clone();
     let card = Arc::new(StaticAgentCard::new(card));
     let handler = Arc::new(
-        DefaultRequestHandler::new(SkillExecutor::new(skill), InMemoryTaskStore::new())
+        DefaultRequestHandler::new(SkillExecutor::new(skill), RedactingTaskStore::new())
             .with_capabilities(capabilities),
     );
     let rpc = jsonrpc_router(handler);

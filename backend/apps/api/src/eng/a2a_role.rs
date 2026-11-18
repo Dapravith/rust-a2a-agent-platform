@@ -10,8 +10,8 @@
 //!    orchestrator validates the content and checks the cited tool calls
 //!    against the MCP audit.
 //!
-//! Workspace: one per workflow, `workspace_id = workflow_id`. The workspace
-//! itself is created by the MCP side (M5); this adapter only names it.
+//! Workspace: the orchestrator passes the workflow's MCP-created workspace
+//! (`RoleInput::workspace_id`); this adapter never derives or names a path.
 
 use std::time::Duration;
 
@@ -59,14 +59,19 @@ impl RemoteRoleAgent {
         })
     }
 
-    fn token(&self, input: &RoleInput, base: &str) -> Result<String, AgentError> {
+    fn token(
+        &self,
+        input: &RoleInput,
+        base: &str,
+        workspace_id: uuid::Uuid,
+    ) -> Result<String, AgentError> {
         let now = chrono::Utc::now().timestamp();
         let claims = CapabilityClaims {
             workflow_id: input.workflow_id,
             run_id: input.run_id,
             role: self.role,
             agent_id: self.identity.agent_id.clone(),
-            workspace_id: input.workflow_id,
+            workspace_id,
             tools: McpTool::allowed_for(self.role),
             scope: input.scope.clone(),
             base_sha: base.to_owned(),
@@ -111,10 +116,22 @@ impl RoleAgent for RemoteRoleAgent {
             if input.role != self.role {
                 return Err(failed("adapter role mismatch"));
             }
+            // The base is the human-approved assignment's (the workspace was created at it).
             let base = input
-                .base_commit_sha
-                .clone()
-                .ok_or_else(|| failed("no base commit configured for the MCP workspace"))?;
+                .artifact(engineering::artifacts::ArtifactKind::WorkAssignment)
+                .and_then(|a| a["base_commit_sha"].as_str().map(str::to_owned))
+                .or_else(|| input.base_commit_sha.clone());
+            let mcp_token = if self.requires_tool_evidence() {
+                let base = base
+                    .as_deref()
+                    .ok_or_else(|| failed("no base commit for the MCP workspace"))?;
+                let ws = input
+                    .workspace_id
+                    .ok_or_else(|| failed("no MCP workspace was provided for this run"))?;
+                Some(self.token(&input, base, ws)?)
+            } else {
+                None
+            };
             let task = RoleTask {
                 workflow_id: input.workflow_id,
                 run_id: input.run_id,
@@ -129,9 +146,9 @@ impl RoleAgent for RemoteRoleAgent {
                     })
                     .collect(),
                 scope: input.scope.clone(),
-                base_commit_sha: Some(base.clone()),
+                base_commit_sha: base,
                 candidate_commit_sha: input.candidate_commit_sha.clone(),
-                mcp_token: self.token(&input, &base)?,
+                mcp_token,
             };
             let part = data_part(&task).map_err(|e| failed(e.to_string()))?;
             let out = self
@@ -142,7 +159,7 @@ impl RoleAgent for RemoteRoleAgent {
             tracing::info!(run_id = %input.run_id, role = self.role.as_str(),
                 task_id = ?out.task_id, tool_calls = out.value.tool_calls.len(), "remote role agent finished");
             Ok(AgentOutput {
-                content: out.value.content,
+                content: contracts::role::normalize_numbers(out.value.content),
                 tool_requests: vec![],
                 a2a_task_id: out.task_id,
                 usage: Usage::default(),

@@ -136,18 +136,20 @@ fn check_claims(c: &CapabilityClaims) -> Result<(), TokenError> {
     Ok(())
 }
 
-/// Issues a token. Refuses claims that over-grant the role.
-pub fn issue_token(key: &[u8], claims: &CapabilityClaims) -> Result<String, TokenError> {
-    check_claims(claims)?;
-    let payload = serde_json::to_vec(claims).map_err(|_| TokenError::Malformed)?;
+/// Signature domains: an agent capability token can never be accepted as an
+/// orchestrator control token, or the other way round.
+const AGENT_DOMAIN: &[u8] = b"a2a-mcp-agent-v1\0";
+const CONTROL_DOMAIN: &[u8] = b"a2a-mcp-control-v1\0";
+
+fn sign(key: &[u8], domain: &[u8], payload: &[u8]) -> Result<String, TokenError> {
     let mut m = mac(key)?;
-    m.update(&payload);
+    m.update(domain);
+    m.update(payload);
     let sig = m.finalize().into_bytes();
-    Ok(format!("{}.{}", hex::encode(&payload), hex::encode(sig)))
+    Ok(format!("{}.{}", hex::encode(payload), hex::encode(sig)))
 }
 
-/// Verifies signature, expiry and claim consistency. `now` is unix seconds.
-pub fn verify_token(key: &[u8], token: &str, now: i64) -> Result<CapabilityClaims, TokenError> {
+fn open_signed(key: &[u8], domain: &[u8], token: &str) -> Result<Vec<u8>, TokenError> {
     if token.len() > 16 * 1024 {
         return Err(TokenError::Malformed);
     }
@@ -155,9 +157,23 @@ pub fn verify_token(key: &[u8], token: &str, now: i64) -> Result<CapabilityClaim
     let payload = hex::decode(p).map_err(|_| TokenError::Malformed)?;
     let sig = hex::decode(s).map_err(|_| TokenError::Malformed)?;
     let mut m = mac(key)?;
+    m.update(domain);
     m.update(&payload);
     // Constant-time comparison.
     m.verify_slice(&sig).map_err(|_| TokenError::BadSignature)?;
+    Ok(payload)
+}
+
+/// Issues a token. Refuses claims that over-grant the role.
+pub fn issue_token(key: &[u8], claims: &CapabilityClaims) -> Result<String, TokenError> {
+    check_claims(claims)?;
+    let payload = serde_json::to_vec(claims).map_err(|_| TokenError::Malformed)?;
+    sign(key, AGENT_DOMAIN, &payload)
+}
+
+/// Verifies signature, expiry and claim consistency. `now` is unix seconds.
+pub fn verify_token(key: &[u8], token: &str, now: i64) -> Result<CapabilityClaims, TokenError> {
+    let payload = open_signed(key, AGENT_DOMAIN, token)?;
     let claims: CapabilityClaims =
         serde_json::from_slice(&payload).map_err(|_| TokenError::Malformed)?;
     check_claims(&claims)?;
@@ -165,6 +181,47 @@ pub fn verify_token(key: &[u8], token: &str, now: i64) -> Result<CapabilityClaim
         return Err(TokenError::Expired);
     }
     Ok(claims)
+}
+
+/// Orchestrator-only control operation: create the workflow's workspace at
+/// `base_sha` from the MCP server's configured source repository. Agents never
+/// receive this token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlClaims {
+    pub workflow_id: Uuid,
+    pub base_sha: String,
+    pub iat: i64,
+    pub exp: i64,
+}
+
+fn check_control(c: &ControlClaims) -> Result<(), TokenError> {
+    crate::validate_commit_sha("base_sha", &c.base_sha)
+        .map_err(|e| TokenError::InvalidClaims(e.to_string()))?;
+    if c.exp - c.iat > MAX_TOKEN_TTL_SECS || c.exp <= c.iat {
+        return Err(TokenError::TtlTooLong);
+    }
+    Ok(())
+}
+
+pub fn issue_control_token(key: &[u8], claims: &ControlClaims) -> Result<String, TokenError> {
+    check_control(claims)?;
+    let payload = serde_json::to_vec(claims).map_err(|_| TokenError::Malformed)?;
+    sign(key, CONTROL_DOMAIN, &payload)
+}
+
+pub fn verify_control_token(
+    key: &[u8],
+    token: &str,
+    now: i64,
+) -> Result<ControlClaims, TokenError> {
+    let payload = open_signed(key, CONTROL_DOMAIN, token)?;
+    let c: ControlClaims = serde_json::from_slice(&payload).map_err(|_| TokenError::Malformed)?;
+    check_control(&c)?;
+    if now < c.iat || now >= c.exp {
+        return Err(TokenError::Expired);
+    }
+    Ok(c)
 }
 
 /// A validated, authorized tool call, ready for execution.
@@ -688,5 +745,30 @@ mod tests {
             assert!(patch_paths(bad).is_err(), "{why}");
         }
         assert!(patch_paths(&"x".repeat(MAX_PATCH_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn agent_and_control_tokens_cannot_be_swapped() {
+        let agent = issue_token(KEY, &claims(Role::Developer, vec![])).unwrap();
+        let ctl = ControlClaims {
+            workflow_id: Uuid::nil(),
+            base_sha: SHA.into(),
+            iat: 1000,
+            exp: 1300,
+        };
+        let control = issue_control_token(KEY, &ctl).unwrap();
+        assert_eq!(verify_control_token(KEY, &control, 1100).unwrap(), ctl);
+        assert_eq!(
+            verify_control_token(KEY, &agent, 1100),
+            Err(TokenError::BadSignature)
+        );
+        assert_eq!(
+            verify_token(KEY, &control, 1100),
+            Err(TokenError::BadSignature)
+        );
+        assert_eq!(
+            verify_control_token(KEY, &control, 1300),
+            Err(TokenError::Expired)
+        );
     }
 }

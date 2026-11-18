@@ -5,9 +5,10 @@
 //! goes through the configured MCP server with the per-run token from the task.
 //! The agent holds no workspace, credentials or policy of its own.
 //!
-//! This module provides the Code Reviewer in **deterministic (rule-based)
-//! mode**: its findings come only from the real MCP diff. Phase 6C puts a real
-//! provider behind the same contract.
+//! All six roles run in **deterministic (rule-based) mode** (Mode A): the
+//! Code Reviewer here, the other five in [`roles`]. Their findings and facts
+//! come from real MCP tool results. Phase 6C puts real providers behind the
+//! same contract.
 
 use a2a::{AgentCard, AgentSkill};
 use agent_runtime::{Skill, agent_card};
@@ -25,6 +26,10 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::Value;
 
+pub mod roles;
+
+pub use roles::{AgentsConfig, agent_path, router};
+
 pub const DEFAULT_PORT: u16 = 9111;
 pub const PROVIDER: &str = "deterministic";
 
@@ -33,7 +38,7 @@ pub struct Mcp {
     client: rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>,
 }
 
-fn fail(msg: impl Into<String>) -> AgentFailure {
+pub(crate) fn fail(msg: impl Into<String>) -> AgentFailure {
     AgentFailure::new(AgentFailureCode::Internal, msg)
 }
 
@@ -73,7 +78,7 @@ impl Mcp {
     }
 }
 
-fn tool_call_id(v: &Value) -> Result<uuid::Uuid, AgentFailure> {
+pub(crate) fn tool_call_id(v: &Value) -> Result<uuid::Uuid, AgentFailure> {
     v["tool_call_id"]
         .as_str()
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
@@ -195,7 +200,11 @@ impl CodeReviewer {
             .candidate_commit_sha
             .as_deref()
             .ok_or_else(|| fail("no candidate commit to review"))?;
-        let mcp = Mcp::connect(&self.mcp_url, &task.mcp_token).await?;
+        let token = task
+            .mcp_token
+            .as_deref()
+            .ok_or_else(|| fail("no MCP token in the task"))?;
+        let mcp = Mcp::connect(&self.mcp_url, token).await?;
         let result = async {
             let diff = mcp.call("repository.diff", serde_json::json!({})).await?;
             if diff["head_sha"].as_str() != Some(candidate) {

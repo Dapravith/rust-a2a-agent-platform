@@ -236,6 +236,50 @@ impl Workspace {
 }
 
 impl Workspace {
+    pub async fn create_from(
+        root: &Path,
+        source: &Path,
+        base: &str,
+    ) -> Result<Workspace, WorkspaceError> {
+        engineering::validate_commit_sha("base_sha", base)
+            .map_err(|e| WorkspaceError::Git(e.to_string()))?;
+        let id = uuid::Uuid::now_v7();
+        let name = id.to_string();
+        let src = source
+            .to_str()
+            .ok_or_else(|| WorkspaceError::Git("source path is not UTF-8".into()))?;
+        let created = async {
+            git::run(
+                root,
+                &[
+                    "-c",
+                    "protocol.file.allow=always",
+                    "clone",
+                    "-q",
+                    "--no-checkout",
+                    "--no-hardlinks",
+                    "--",
+                    src,
+                    &name,
+                ],
+            )
+            .await?;
+            let dir = root.join(&name);
+            let commit = format!("{base}^{{commit}}");
+            git::run(&dir, &["cat-file", "-e", &commit])
+                .await
+                .map_err(|_| WorkspaceError::BaseNotAncestor)?;
+            git::run(&dir, &["checkout", "-q", "--detach", base]).await?;
+            git::run(&dir, &["remote", "remove", "origin"]).await?;
+            Workspace::open(root, id)
+        }
+        .await;
+        if created.is_err() {
+            let _ = std::fs::remove_dir_all(root.join(&name));
+        }
+        created
+    }
+
     async fn current_branch(&self) -> Result<Option<String>, WorkspaceError> {
         match git::run(&self.dir, &["symbolic-ref", "-q", "--short", "HEAD"]).await {
             Ok(b) => Ok(Some(String::from_utf8_lossy(&b).trim().to_owned())),

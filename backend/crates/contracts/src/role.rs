@@ -19,6 +19,24 @@ use crate::{ContractError, Validate};
 pub const ROLE_RESULT_ARTIFACT_NAME: &str = "role_result";
 pub const CODE_REVIEWER_AGENT_NAME: &str = "Engineering Code Reviewer";
 pub const CODE_REVIEWER_SKILL_ID: &str = "review-candidate";
+pub const PROJECT_MANAGER_AGENT_NAME: &str = "Engineering Project Manager";
+pub const PROJECT_COORDINATOR_AGENT_NAME: &str = "Engineering Project Coordinator";
+pub const DEVELOPER_AGENT_NAME: &str = "Engineering Developer";
+pub const QA_TESTER_AGENT_NAME: &str = "Engineering QA Tester";
+pub const QUALITY_LEAD_AGENT_NAME: &str = "Engineering Quality Lead";
+
+/// Agent Card name for a role (`role` as in `engineering::roles::Role::as_str`).
+pub fn agent_name(role: &str) -> Option<&'static str> {
+    Some(match role {
+        "project_manager" => PROJECT_MANAGER_AGENT_NAME,
+        "project_coordinator" => PROJECT_COORDINATOR_AGENT_NAME,
+        "developer" => DEVELOPER_AGENT_NAME,
+        "code_reviewer" => CODE_REVIEWER_AGENT_NAME,
+        "qa_tester" => QA_TESTER_AGENT_NAME,
+        "quality_lead" => QUALITY_LEAD_AGENT_NAME,
+        _ => return None,
+    })
+}
 
 const MAX_ARTIFACTS: usize = 8;
 const MAX_SCOPE: usize = 50;
@@ -44,8 +62,9 @@ pub struct RoleTask {
     pub scope: Vec<String>,
     pub base_commit_sha: Option<String>,
     pub candidate_commit_sha: Option<String>,
-    /// Short-lived MCP capability token for this run only. Never logged.
-    pub mcp_token: String,
+    /// Short-lived MCP capability token for this run only (roles with MCP
+    /// tools). Never logged; stripped from the agent's stored task history.
+    pub mcp_token: Option<String>,
 }
 
 fn invalid(field: &'static str, reason: &str) -> ContractError {
@@ -72,8 +91,12 @@ impl Validate for RoleTask {
         if self.artifacts.len() > MAX_ARTIFACTS || self.scope.len() > MAX_SCOPE {
             return Err(invalid("artifacts", "too many items"));
         }
-        if self.mcp_token.is_empty() || self.mcp_token.len() > MAX_TOKEN {
-            return Err(invalid("mcp_token", "missing or too long"));
+        if self
+            .mcp_token
+            .as_ref()
+            .is_some_and(|t| t.is_empty() || t.len() > MAX_TOKEN)
+        {
+            return Err(invalid("mcp_token", "empty or too long"));
         }
         for s in [&self.base_commit_sha, &self.candidate_commit_sha]
             .into_iter()
@@ -112,5 +135,49 @@ impl Validate for RoleResult {
             return Err(invalid("tool_calls", "too many items"));
         }
         Ok(())
+    }
+}
+
+/// A2A carries a `DataPart` as a protobuf `Struct`, whose numbers are all
+/// doubles: an agent's `exit_code: 0` arrives as `0.0`. Whole-number doubles
+/// are turned back into integers so the strict artifact contracts (`u64`/`i32`)
+/// can validate them. Fractional or out-of-range numbers are left alone, and the
+/// contract then rejects them.
+pub fn normalize_numbers(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Number(n) if n.is_f64() => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Value::from(f as i64),
+            _ => Value::Number(n),
+        },
+        Value::Array(a) => Value::Array(a.into_iter().map(normalize_numbers).collect()),
+        Value::Object(o) => Value::Object(
+            o.into_iter()
+                .map(|(k, v)| (k, normalize_numbers(v)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::normalize_numbers;
+    use serde_json::json;
+
+    #[test]
+    fn whole_doubles_become_integers_others_are_untouched() {
+        let v = normalize_numbers(
+            json!({"exit_code": 0.0, "neg": -1.0, "ms": 1234.0, "frac": 1.5,
+                                         "nested": [{"n": 2.0}], "s": "1.0", "i": 3}),
+        );
+        assert_eq!(
+            v,
+            json!({"exit_code": 0, "neg": -1, "ms": 1234, "frac": 1.5,
+                             "nested": [{"n": 2}], "s": "1.0", "i": 3})
+        );
+        assert!(v["exit_code"].is_i64());
+        assert!(normalize_numbers(json!(1e300)).is_f64());
     }
 }

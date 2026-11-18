@@ -314,6 +314,7 @@ mod tests {
             scope: vec![],
             candidate_commit_sha: None,
             base_commit_sha: None,
+            workspace_id: None,
             patch: None,
         };
         let m = user_message(&input);

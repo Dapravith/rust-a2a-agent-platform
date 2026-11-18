@@ -2,7 +2,7 @@
 // Primary navigation. Lists only implemented pages.
 import Icon, { type IconName } from "../ui/Icon.astro";
 
-export type NavKey = "dashboard" | "workflows";
+export type NavKey = "dashboard" | "workflows" | "engineering";
 
 interface Props {
   active?: NavKey;
@@ -11,6 +11,7 @@ const { active } = Astro.props;
 const items: { key: NavKey; href: string; label: string; icon: IconName }[] = [
   { key: "dashboard", href: "/", label: "Dashboard", icon: "home" },
   { key: "workflows", href: "/workflows", label: "Workflows", icon: "list" },
+  { key: "engineering", href: "/engineering", label: "Engineering", icon: "shield-check" },
 ];
 ---
 
@@ -102,9 +103,13 @@ const items: { key: NavKey; href: string; label: string; icon: IconName }[] = [
       height: auto;
       position: static;
       padding: var(--space-2) var(--space-4);
+      /* Three links no longer fit beside the brand on phones: wrap, never overflow. */
+      flex-wrap: wrap;
+      gap: var(--space-2);
     }
     .nav__links {
       flex-direction: row;
+      flex-wrap: wrap;
       gap: var(--space-1);
     }
     .nav__link {

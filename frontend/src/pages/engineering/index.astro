@@ -1,0 +1,144 @@
+---
+// Engineering workflows (Phase 6): read-only supervision list + configured
+// providers. No create or approve actions: submissions and decisions need an
+// authenticated human (identity provider, Phase 6D).
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import PageHeader from "../../components/navigation/PageHeader.astro";
+import Card from "../../components/ui/Card.astro";
+import Callout from "../../components/ui/Callout.astro";
+import EmptyState from "../../components/ui/EmptyState.astro";
+import ErrorState from "../../components/ui/ErrorState.astro";
+import StatusBadge from "../../components/ui/StatusBadge.astro";
+import { eng } from "../../lib/config.ts";
+import { describeLoadError } from "../../lib/errors.ts";
+import { formatUtc, shortId, truncate } from "../../lib/format.ts";
+import { engStatus, providerLabel, roleLabel } from "../../features/engineering/present.ts";
+import type { EngStatus, EngWorkflow } from "../../features/engineering/schemas.ts";
+
+let items: EngWorkflow[] = [];
+let status: EngStatus | null = null;
+let error: ReturnType<typeof describeLoadError> | null = null;
+try {
+  [items, status] = await Promise.all([eng.list(50), eng.status()]);
+} catch (e) {
+  error = describeLoadError(e, "engineering workflows");
+  Astro.response.status = 503;
+}
+---
+
+<DashboardLayout title="Engineering" active="engineering">
+  <PageHeader
+    title="Engineering workflows"
+    description="Six role agents (PM → Coordinator → Developer → Reviewer → QA → Quality Lead) over A2A, with tool access only through MCP. Read-only: humans decide at the plan and delivery gates."
+  />
+
+  {
+    error ? (
+      <ErrorState title={error.title} detail={error.detail} />
+    ) : (
+      <>
+        {status && !status.approvals_enabled && (
+          <Callout tone="info" title="Human approvals are disabled in this deployment">
+            No identity provider is configured, so plan and delivery decisions cannot be recorded here. Workflows
+            stop safely at those gates.
+          </Callout>
+        )}
+
+        <Card title="Configured role providers" id="providers" icon="shield-check">
+          {status && status.providers.length > 0 ? (
+            <table class="tbl">
+              <thead>
+                <tr><th>Role</th><th>Agent</th><th>Provider</th></tr>
+              </thead>
+              <tbody>
+                {status.providers.map((p) => {
+                  const pl = providerLabel(p);
+                  return (
+                    <tr>
+                      <td>{roleLabel(p.role)}</td>
+                      <td class="mono">{p.agent_id}</td>
+                      <td>
+                        <StatusBadge tone={pl.isModel ? "info" : "neutral"}>{pl.label}</StatusBadge>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <EmptyState compact title="No role providers are configured" description="The API runs without engineering agents; new workflows would fail with provider_unconfigured." />
+          )}
+        </Card>
+
+        <Card title="Workflows" id="eng-workflows" icon="list" flush>
+          {items.length > 0 ? (
+            <table class="tbl">
+              <thead>
+                <tr><th>Title</th><th>Status</th><th>Candidate</th><th>Runs</th><th>Created (UTC)</th></tr>
+              </thead>
+              <tbody>
+                {items.map((w) => {
+                  const st = engStatus(w.status);
+                  return (
+                    <tr>
+                      <td>
+                        <a href={`/engineering/${w.id}`}>{truncate(w.title, 90)}</a>
+                        <span class="mono muted"> {shortId(w.id)}</span>
+                      </td>
+                      <td><StatusBadge tone={st.tone}>{st.label}</StatusBadge></td>
+                      <td class="mono">{w.candidate_commit_sha ? w.candidate_commit_sha.slice(0, 12) : "—"}</td>
+                      <td>{w.agent_runs} / {w.max_agent_runs}</td>
+                      <td>{formatUtc(w.created_at)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <EmptyState compact title="No engineering workflows yet" />
+          )}
+        </Card>
+      </>
+    )
+  }
+</DashboardLayout>
+
+<style>
+  .tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+  .tbl th,
+  .tbl td {
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+  .tbl th {
+    color: var(--color-text-secondary);
+    font-weight: var(--weight-semibold);
+  }
+  /* Long badges (e.g. provider labels) wrap instead of widening the page. */
+  .tbl :global(.badge) {
+    height: auto;
+    min-height: 22px;
+    white-space: normal;
+    max-width: 100%;
+  }
+  .muted {
+    color: var(--color-text-secondary);
+  }
+  :global(#providers),
+  :global(#eng-workflows) {
+    margin-top: var(--space-4);
+  }
+  @media (max-width: 640px) {
+    .tbl th:nth-child(n + 4),
+    .tbl td:nth-child(n + 4) {
+      display: none;
+    }
+  }
+</style>

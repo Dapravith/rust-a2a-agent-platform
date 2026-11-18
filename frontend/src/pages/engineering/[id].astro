@@ -1,0 +1,314 @@
+---
+// Engineering workflow detail (read-only supervision). Everything shown is
+// what the Rust orchestrator and the MCP server recorded: stage runs (provider,
+// model, A2A task), the MCP tool calls each run made, typed artifacts, gates,
+// human decisions and the audit trail. There are no action buttons: decisions
+// need an authenticated human (Phase 6D).
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import PageHeader from "../../components/navigation/PageHeader.astro";
+import Card from "../../components/ui/Card.astro";
+import Callout from "../../components/ui/Callout.astro";
+import EmptyState from "../../components/ui/EmptyState.astro";
+import ErrorState from "../../components/ui/ErrorState.astro";
+import StatusBadge from "../../components/ui/StatusBadge.astro";
+import { eng } from "../../lib/config.ts";
+import { ApiError, describeLoadError } from "../../lib/errors.ts";
+import { formatDuration, formatUtc, shortId } from "../../lib/format.ts";
+import { isWorkflowId } from "../../features/workflows/api.ts";
+import { callsByRun, engStatus, providerLabel, roleLabel, tokens, toolTone } from "../../features/engineering/present.ts";
+import type { EngDetail, EngStatus } from "../../features/engineering/schemas.ts";
+
+const id = Astro.params.id ?? "";
+let d: EngDetail | null = null;
+let status: EngStatus | null = null;
+let notFound = !isWorkflowId(id);
+let error: ReturnType<typeof describeLoadError> | null = null;
+if (!notFound) {
+  try {
+    [d, status] = await Promise.all([eng.get(id), eng.status()]);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) notFound = true;
+    else error = describeLoadError(e, "this engineering workflow");
+  }
+}
+if (notFound) Astro.response.status = 404;
+else if (error) Astro.response.status = 503;
+
+const st = d ? engStatus(d.workflow.status) : null;
+const byRun = callsByRun(d?.tool_calls ?? []);
+const short = (s: string | null | undefined, n = 12) => (s ? s.slice(0, n) : "—");
+const pretty = (v: unknown) => JSON.stringify(v, null, 2);
+---
+
+<DashboardLayout title={d ? d.workflow.title : notFound ? "Not found" : "Engineering workflow"} active="engineering">
+  {
+    notFound ? (
+      <EmptyState title="Engineering workflow not found" description="Check the link, or open the list." />
+    ) : error ? (
+      <ErrorState title={error.title} detail={error.detail} />
+    ) : d && st ? (
+      <>
+        <PageHeader
+          title={d.workflow.title}
+          description={d.workflow.requirements}
+          crumbs={[{ href: "/engineering", label: "Engineering" }]}
+        />
+
+        <Card title="Status" id="eng-status" icon="info">
+          <dl class="kv">
+            <dt>State</dt>
+            <dd><StatusBadge tone={st.tone}>{st.label}</StatusBadge></dd>
+            <dt>Workflow</dt>
+            <dd class="mono">{d.workflow.id} · version {d.workflow.version}</dd>
+            <dt>Candidate commit</dt>
+            <dd class="mono">{d.workflow.candidate_commit_sha ?? "—"}</dd>
+            <dt>MCP workspace</dt>
+            <dd class="mono">{d.workspace_id ?? "—"}</dd>
+            <dt>Agent runs</dt>
+            <dd>{d.workflow.agent_runs} of {d.workflow.max_agent_runs} allowed</dd>
+            {d.workflow.error_code && (
+              <>
+                <dt>Failure</dt>
+                <dd><code>{d.workflow.error_code}</code> {d.workflow.error}</dd>
+              </>
+            )}
+          </dl>
+          {d.awaiting_decision && (
+            <Callout tone="warning" title={`Waiting for a human ${d.awaiting_decision} decision`}>
+              {status?.approvals_enabled
+                ? "An authorized approver must decide through an authenticated client."
+                : "Approvals are disabled here (no identity provider). Nothing can move this workflow past the gate."}
+              {" "}AI output, including the Quality Lead's recommendation, is advice only.
+            </Callout>
+          )}
+        </Card>
+
+        <Card title="Stages" id="eng-stages" icon="list" flush>
+          {d.runs.length === 0 ? (
+            <EmptyState compact title="No stage has run yet" />
+          ) : (
+            <ol class="stages">
+              {d.runs.map((r) => {
+                const pl = providerLabel(r);
+                const calls = byRun.get(r.id) ?? [];
+                const took = formatDuration(r.started_at, r.finished_at);
+                const tok = tokens(r);
+                return (
+                  <li class="stage">
+                    <div class="stage__head">
+                      <strong>{roleLabel(r.role)}</strong>
+                      <StatusBadge tone={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "info"}>
+                        {r.status}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}
+                      </StatusBadge>
+                      <StatusBadge tone={pl.isModel ? "info" : "neutral"}>{pl.label}</StatusBadge>
+                    </div>
+                    <p class="stage__meta mono">
+                      agent {r.agent_id} · run {shortId(r.id)} · A2A task {short(r.a2a_task_id, 18)}
+                      {took && ` · ${took}`}
+                      {tok && ` · tokens ${tok}`}
+                    </p>
+                    {r.error_code && <p class="stage__err"><code>{r.error_code}</code> {r.error}</p>}
+                    {calls.length > 0 && (
+                      <table class="tbl">
+                        <caption class="sr-only">MCP tool calls of this run</caption>
+                        <thead>
+                          <tr><th>MCP tool</th><th>Outcome</th><th>Target</th><th>HEAD</th><th>Exit</th></tr>
+                        </thead>
+                        <tbody>
+                          {calls.map((c) => (
+                            <tr>
+                              <td class="mono">{c.tool}</td>
+                              <td>
+                                <StatusBadge tone={toolTone(c)}>{c.outcome}{c.error_code ? ` · ${c.error_code}` : ""}</StatusBadge>
+                              </td>
+                              <td class="mono">{c.target ?? "—"}</td>
+                              <td class="mono">{short(c.head_sha)}</td>
+                              <td>{c.exit_code ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </Card>
+
+        <Card title="Artifacts" id="eng-artifacts" icon="file-text">
+          {d.artifacts.length === 0 ? (
+            <EmptyState compact title="No artifacts yet" />
+          ) : (
+            d.artifacts.map((a) => (
+              <details class="artifact">
+                <summary>
+                  <strong>{a.kind.replaceAll("_", " ")}</strong>
+                  <span class="mono muted">
+                    {" "}by {a.producer_id}{a.provider ? ` (${a.provider})` : ""} · commit {short(a.commit_sha)} · sha256 {short(a.content_hash, 16)}
+                  </span>
+                </summary>
+                <pre class="artifact__json">{pretty(a.content)}</pre>
+              </details>
+            ))
+          )}
+        </Card>
+
+        {d.gates && (
+          <Card title="Delivery gates" id="eng-gates" icon="shield-check">
+            <ul class="gates">
+              {d.gates.map((g) => (
+                <li>
+                  <StatusBadge tone={g.passed ? "success" : "error"} icon={g.passed ? "check" : "x"}>
+                    {g.passed ? "passed" : "failed"}
+                  </StatusBadge>{" "}
+                  <code>{g.gate}</code> {g.detail}
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+
+        <Card title="Human decisions" id="eng-approvals" icon="check-circle">
+          {d.approvals.length === 0 ? (
+            <EmptyState compact title="No human decision recorded" />
+          ) : (
+            <ul class="gates">
+              {d.approvals.map((p) => (
+                <li>
+                  <strong>{p.gate}: {p.decision}</strong> by {p.approver_id} ({p.approver_role}, {p.identity_issuer}) at {formatUtc(p.decided_at)}
+                  {p.reviewed_commit_sha && <span class="mono"> · commit {short(p.reviewed_commit_sha)}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Audit trail" id="eng-audit" icon="clock">
+          <ol class="audit">
+            {d.audit.map((e) => (
+              <li>
+                <span class="mono muted">{formatUtc(e.at)}</span> {e.actor_kind}:{e.actor_id} <code>{e.action}</code>
+                {e.from_status && e.to_status && ` ${e.from_status} → ${e.to_status}`}
+              </li>
+            ))}
+          </ol>
+        </Card>
+      </>
+    ) : null
+  }
+</DashboardLayout>
+
+<style>
+  :global(.card) + :global(.card) {
+    margin-top: var(--space-4);
+  }
+  .kv {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-2) var(--space-4);
+    margin-bottom: var(--space-3);
+  }
+  .kv dt {
+    color: var(--color-text-secondary);
+  }
+  .kv dd {
+    overflow-wrap: anywhere;
+  }
+  .stages {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .stage {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .stage__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .stage__meta {
+    margin-top: var(--space-1);
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+  .stage__err {
+    margin-top: var(--space-1);
+    color: var(--color-danger, inherit);
+  }
+  .tbl {
+    width: 100%;
+    margin-top: var(--space-2);
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+  .tbl th,
+  .tbl td {
+    padding: var(--space-1) var(--space-2);
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+    overflow-wrap: anywhere;
+  }
+  .tbl th {
+    color: var(--color-text-secondary);
+    font-weight: var(--weight-semibold);
+  }
+  .artifact + .artifact {
+    margin-top: var(--space-2);
+  }
+  .artifact summary {
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+  .artifact__json {
+    margin-top: var(--space-2);
+    padding: var(--space-3);
+    max-height: 28rem;
+    overflow: auto;
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .gates,
+  .audit {
+    margin: 0;
+    padding-left: var(--space-4);
+    display: grid;
+    gap: var(--space-2);
+    overflow-wrap: anywhere;
+  }
+  .muted {
+    color: var(--color-text-secondary);
+  }
+  /* Long badges (e.g. provider labels) wrap instead of widening the page. */
+  .tbl :global(.badge),
+  .kv :global(.badge),
+  .stage__head :global(.badge) {
+    height: auto;
+    min-height: 22px;
+    white-space: normal;
+    max-width: 100%;
+  }
+  @media (max-width: 420px) {
+    .kv {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-1);
+    }
+    .kv dd {
+      margin-bottom: var(--space-2);
+    }
+  }
+  @media (max-width: 640px) {
+    .tbl th:nth-child(n + 4),
+    .tbl td:nth-child(n + 4) {
+      display: none;
+    }
+  }
+</style>

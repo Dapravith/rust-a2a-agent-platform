@@ -75,6 +75,7 @@ async fn run() -> Result<(), String> {
         audit: Arc::new(PgAudit::new(pool)),
         runner,
         locks: Default::default(),
+        source_repo: std::env::var_os("MCP_SOURCE_REPO").map(std::path::PathBuf::from),
     });
     let listener = tokio::net::TcpListener::bind(bind)
         .await

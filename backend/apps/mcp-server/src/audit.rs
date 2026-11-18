@@ -41,6 +41,8 @@ pub struct ToolCallRecord {
     pub outcome: Outcome,
     pub error_code: Option<String>,
     pub head_sha: Option<String>,
+    /// Diff/patch calls: SHA-256 of the full candidate diff the server computed.
+    pub patch_sha256: Option<String>,
     pub exit_code: Option<i32>,
     pub result_sha256: Option<String>,
     pub duration_ms: i64,
@@ -66,6 +68,7 @@ impl ToolCallRecord {
             outcome: Outcome::Refused,
             error_code: Some(code.into()),
             head_sha: None,
+            patch_sha256: None,
             exit_code: None,
             result_sha256: None,
             duration_ms: 0,
@@ -87,6 +90,7 @@ impl ToolCallRecord {
             outcome: Outcome::Refused,
             error_code: None,
             head_sha: None,
+            patch_sha256: None,
             exit_code: None,
             result_sha256: None,
             duration_ms: 0,
@@ -155,8 +159,8 @@ impl AuditSink for PgAudit {
             sqlx::query(
                 "INSERT INTO eng_tool_calls (id, workflow_id, run_id, role, agent_id, workspace_id, \
                  tool, target, arguments_sha256, outcome, error_code, head_sha, exit_code, \
-                 result_sha256, duration_ms) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+                 result_sha256, duration_ms, patch_sha256) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
             )
             .bind(r.id)
             .bind(r.workflow_id)
@@ -173,6 +177,7 @@ impl AuditSink for PgAudit {
             .bind(r.exit_code)
             .bind(&r.result_sha256)
             .bind(r.duration_ms)
+            .bind(&r.patch_sha256)
             .execute(&self.pool)
             .await
             .map_err(|e| AuditError(e.to_string()))?;
