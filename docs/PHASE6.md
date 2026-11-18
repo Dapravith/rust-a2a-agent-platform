@@ -3,9 +3,11 @@
 Date: 2026-11-17 · Branch: `phase5/agent-e2e-workflow` (HEAD `3e94306` + uncommitted Phase 5 changes + Phase 6 increment, nothing committed) ·
 Rust 1.100.0 · Postgres 17 (local) · host load average 130–150 on 8 cores for the whole session.
 
-**Bottom line.** This session delivered milestones **M1–M3** and the logic of **M7**, verified with
-deterministic simulation (test Mode A) against real Postgres and real HTTP. **M4 (real provider), M5 (isolated
-code execution), M8 (portal), M9 and Mode B/C are not started.** Human approvals are implemented but
+**Bottom line.** Delivered: milestones **M1–M3**, the logic of **M7**, and **M4 partially**. M4 is the first
+real provider adapter (Anthropic Messages API), for the four non-executing roles only. M1–M3 and M7 are verified
+with deterministic simulation (Mode A); the adapter is verified against an HTTP test double of the provider
+(Mode B). **Mode C (real provider calls) is BLOCKED: no API key in this environment. M5 (isolated code
+execution), M8 (portal) and M9 are not started.** Human approvals are implemented but
 **BLOCKED in production wiring**: no identity provider is configured, so `api serve` answers 503
 `auth_unavailable`. Nothing below claims real multi-provider interoperability.
 
@@ -116,16 +118,30 @@ not adequate for untrusted code from an LLM; candidates are a microVM (Firecrack
 
 ## 7. Provider integration matrix
 
-| Provider | Kind | Auth / tools / structured output / approval hooks / sessions / cancel / usage / licensing | Status |
-|---|---|---|---|
-| Simulation (`eng::sim`) | deterministic in-process | n/a | **Implemented, test-only** |
-| Claude Code / Claude Agent SDK | coding-agent runtime | not inspected this session | NOT STARTED (M4 candidate) |
-| OpenAI Codex | coding-agent runtime | not inspected | NOT STARTED |
-| Gemini CLI | coding-agent CLI | not inspected | NOT STARTED |
-| Grok (xAI API) | LLM API, **not** a coding-agent runtime | not inspected | NOT STARTED |
+Docs checked on 2026-11-17 (first-party pages unless noted). "Verified" means verified **from the docs only**;
+the "Tested here" column is the only claim of execution.
 
-No provider documentation was verified and no provider credentials exist in this environment (Phase 5 also had
-none), so no capability is claimed. M4 must first read each SDK's current docs and record the columns above.
+| Provider | What it is | Auth | Tools / execution | Structured output | Approval hooks | Sessions / cancel | Usage | Tested here |
+|---|---|---|---|---|---|---|---|---|
+| **Anthropic Messages API** (`eng::providers::anthropic`) | LLM API, **not** a coding runtime | `x-api-key` header (also OAuth / WIF in SDKs) | none offered here (no tools, nothing executes) | `output_config.format` JSON schema; no `min*/max*`/`pattern`, `additionalProperties:false` required | n/a (no tools) | stateless; cancel = drop request (deadline) | `usage.input_tokens/output_tokens` | **Mode B** (HTTP test double); Mode C BLOCKED (no key) |
+| Claude Agent SDK (`claude-agent-sdk`, Python/TS) | coding-agent harness (Claude Code as a library); built-in Read/Write/Edit/Bash/... | Anthropic credentials | built-in tools on the host it runs on, `allowedTools` | via prompt / final message | `canUseTool` callback, `PreToolUse`/`PostToolUse` hooks (code.claude.com/docs/en/hooks) | sessions, interrupt | per-result usage | NOT STARTED: no Rust SDK; needs a Node/Python sidecar inside the M5 sandbox |
+| OpenAI Codex (`codex exec`) | coding-agent CLI | `CODEX_API_KEY` env (learn.chatgpt.com/docs/non-interactive-mode) | read-only sandbox by default; `--sandbox workspace-write` | `--json` event stream | approval policy flags (`-a never` for headless) | session resume | in JSON events (unverified) | NOT STARTED |
+| Gemini CLI (`gemini -p`) | coding-agent CLI | `GEMINI_API_KEY` | built-in tools; `-s` sandbox; `--approval-mode` | `--output-format json` / `stream-json` | `--approval-mode` (e.g. `auto_edit`; `--yolo` = auto-approve all, unacceptable here) | `-r` resume | `stats.models.*.tokens` in JSON (google-gemini.github.io/gemini-cli/docs/cli/headless.html) | NOT STARTED |
+| Grok (xAI API) | LLM API (OpenAI-compatible Responses/Chat) with server-side tools incl. code execution; **not** a local coding runtime | `Authorization: Bearer $XAI_API_KEY` | function calling (client-side), server web/X search, server code execution (docs.x.ai) | `json_schema` strict response format | n/a for client tools (we decide) | `previous_response_id` | usage in response | NOT STARTED; would fit the same non-executing roles as the Anthropic adapter |
+| Simulation (`eng::sim`) | deterministic test double | none | none | n/a | n/a | n/a | none | Mode A only, never wired by `serve` |
+
+Licensing/operational restrictions for each provider were **not** reviewed (terms of service, data retention,
+rate limits) and must be before any is enabled.
+
+**M4 decision.** First real provider = Anthropic Messages API, through the existing tested `reqwest` client
+(`agent_runtime::LlmClient`, now also returning raw JSON + token usage via `generate_json`). It serves only
+PM, Coordinator, Code Reviewer and Quality Lead; `AnthropicRoleAgent::new(Developer|QaTester)` is refused.
+Facts are never taken from the model: the Coordinator's `base_commit_sha` comes from `ENG_BASE_COMMIT_SHA`
+(until the M5 workspace supplies it) and the Reviewer/QL `commit_sha` from the orchestrator. The Reviewer refuses
+without the real candidate diff (needs M5), so it cannot "review" metadata. Configuration: `ENG_PROVIDER=anthropic`
+(+ `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` default `claude-opus-5-5`, `LLM_*`); default `none`.
+With it set, a workflow runs PM → (human) → Coordinator and then fails honestly at the Developer
+(`provider_unconfigured`); and in `api serve` no one can submit yet, because the authenticator is `Disabled`.
 
 ## 8. Test results (Mode A, real Postgres, real HTTP for the API)
 
@@ -169,6 +185,30 @@ Regression (full workspace, `cargo fmt --check`, `clippy -D warnings`, `cargo te
 
 The P0 Worker → Reviewer workflow still passes its whole suite, so it is preserved.
 
+### 8b. Mode B: provider contract tests (M4)
+
+`cargo test -p api --test phase6_provider`: **9 passed**, plus 2 unit tests in `eng::providers::anthropic`.
+The test double is a local axum server implementing `POST /v1/messages`. It asserts the key and version headers
+and records every request body. The orchestrator and Postgres are real.
+
+| Requirement | Test | Evidence | Result |
+|---|---|---|---|
+| Real adapter produces a validated artifact | `real_provider_plans_and_records_model_and_usage` | plan stored; run and artifact record provider `anthropic-messages`, model `claude-opus-5-5`, 1234/567 tokens; request has closed JSON schema, role system prompt, delimited untrusted data, no tools, no key in body | PASS |
+| Authentication failure | `authentication_failure_is_not_retried_or_faked` | 401: one request, one failed run `agent_failed`, key redacted, no artifact, provider still `anthropic-messages` | PASS |
+| Provider outage, bounded retry | `provider_outage_is_retried_within_bounds_then_fails` | 529: exactly 6 requests (3 client attempts × 2 stage attempts), then `agent_unavailable` | PASS |
+| Provider timeout | `provider_timeout_fails_the_stage` | 1.5 s response vs 0.5 s timeout: 2 runs, `llm_timeout`, workflow failed | PASS |
+| Invalid responses | `invalid_responses_are_rejected` | non-JSON / `refusal` / `max_tokens` → `agent_failed`; extra `approved` field or `/etc` scope → `artifact_invalid`; no artifact | PASS |
+| Unsupported capability | `execution_roles_are_unsupported` | adapter construction for Developer and QA is refused | PASS |
+| Permission enforcement on real output | `coordinator_cannot_invent_base_or_widen_scope` | model's base SHA overwritten by configured base; scope beyond plan → `policy_violation`; no base configured → refused before any call | PASS |
+| No metadata-only review | `reviewer_without_a_real_diff_refuses` | no diff → `agent_failed`, provider never called | PASS |
+| Commit binding / usage | `quality_lead_assessment_is_bound_to_the_candidate` | model's commit SHA overwritten by the candidate's; QL received QA and review reports | PASS |
+| Schema features + prompt injection (unit) | `schemas_use_only_supported_features`, `delimiter_cannot_be_closed_by_content` | no unsupported constraints; `</workflow_data>` in user content is escaped | PASS |
+| No silent mock fallback | all above | every failure ends `failed` with the real provider recorded; `serve` never wires simulation | PASS |
+
+**Mode C (real provider calls): BLOCKED.** No `ANTHROPIC_API_KEY` and no `ant` profile exist here. A Mode C run
+also spends money, so it needs the owner's explicit go-ahead. Even then it covers only PM → plan gate →
+Coordinator, because the Developer has no provider until M5.
+
 ## 9. Quality gate (§15)
 
 | Criterion | Result | Basis |
@@ -184,16 +224,18 @@ The P0 Worker → Reviewer workflow still passes its whole suite, so it is prese
 | Humans can inspect the workflow | PARTIAL | `GET /api/eng/workflows/{id}` returns runs, artifacts, gates, approvals, audit; portal (M8) not built |
 | Restart recovery preserves workflow + approval state | PASS (in-process) | N9; a killed-process test like Phase 3's is still to add |
 | Failed stages cannot become approved deliveries | PASS | gates + N4, failed-evidence test |
-| Security and integration regression tests pass | PASS (Mode A + existing suites) | §8a; Mode B/C not run |
+| Security and integration regression tests pass | PASS (Modes A + B and the existing suites) | §8a, §8b; Mode C BLOCKED |
 
-**Overall Phase 6: NOT COMPLETE.** M1–M3 PASS; M7 logic PASS / production BLOCKED (IdP); M4, M5, M6 (real
-evidence), M8, M9, M10 NOT STARTED.
+**Overall Phase 6: NOT COMPLETE.** M1–M3 PASS. M4 PARTIAL: Mode B PASS, Mode C BLOCKED (no credentials), and no
+coding-agent runtime yet. M7 logic PASS, production BLOCKED (no IdP). M5, M6 (real evidence), M8, M9 and M10
+NOT STARTED.
 
 ## 10. Remaining gaps, cost considerations, production limitations
 
-1. **M4 – first real provider.** Inspect docs, pick one coding-agent runtime (Claude Agent SDK is the natural
-   first: same vendor as the existing LLM client), implement `RoleAgent` for it, Mode B contract tests with an
-   HTTP test double (auth failure, invalid response, unsupported capability, timeout, usage accounting, no fallback).
+1. **M4 – remaining.** (a) Mode C: with an owner-approved key and budget, run PM → plan approval → Coordinator
+   against the real API, recording the request ids, token usage and cost. (b) A coding-agent runtime for
+   Developer/QA (Claude Agent SDK, Codex or Gemini CLI). It needs a sidecar process inside the M5 sandbox; never
+   on the host.
 2. **M5 – isolation.** Real Git worktree per workflow on a disposable sandbox; run allowlisted checks there;
    compute candidate SHA/patch hash from the actual repo, not from the agent's claim; enforce tool policy before
    execution; limits and secret redaction. Assess microVM vs container.

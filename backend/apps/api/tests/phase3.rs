@@ -42,6 +42,11 @@ async fn bind() -> (tokio::net::TcpListener, String) {
     (l, url)
 }
 
+/// A loopback URL that refuses connections. Port 1 is privileged, so no test
+/// server (they all bind ephemeral ports unprivileged) can ever be handed it —
+/// unlike bind-then-drop, which races with parallel tests' `bind(0)` calls.
+const CLOSED_URL: &str = "http://127.0.0.1:1";
+
 async fn serve(app: axum::Router) -> String {
     let (l, url) = bind().await;
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
@@ -628,8 +633,7 @@ async fn reviewer_refusal_fails_with_stable_code(pool: PgPool) {
 /// The provider is down: the failure is reported, never answered by mock.
 #[sqlx::test(migrator = "api::db::MIGRATOR")]
 async fn provider_outage_never_falls_back_to_mock(pool: PgPool) {
-    let (l, dead) = bind().await;
-    drop(l);
+    let dead = CLOSED_URL.to_string();
     let (w, r) = (
         worker(Some(hosted(&dead))).await,
         reviewer(Some(hosted(&dead))).await,
@@ -644,8 +648,7 @@ async fn provider_outage_never_falls_back_to_mock(pool: PgPool) {
 
 #[sqlx::test(migrator = "api::db::MIGRATOR")]
 async fn stage_and_code_recorded_for_a2a_failures(pool: PgPool) {
-    let (l, dead) = bind().await;
-    drop(l);
+    let dead = CLOSED_URL.to_string();
     let base = api(pool, &dead, &reviewer(None).await).await;
     let wf = run(&base).await;
     assert_eq!(wf["error_code"], "agent_unreachable");
