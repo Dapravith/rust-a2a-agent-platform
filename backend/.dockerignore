@@ -1,0 +1,6 @@
+target/
+fixtures/
+**/.env
+**/.env.*
+Dockerfile
+.dockerignore

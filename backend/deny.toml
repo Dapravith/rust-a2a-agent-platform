@@ -1,0 +1,40 @@
+# cargo-deny policy (CI: `cargo deny --locked check`). Advisory ignores need
+# a reason and a review date in the comment; prefer upgrading instead.
+
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    # Unmaintained notice, not a vulnerability; no successor release exists.
+    # Pulled in by sqlx (`chrono` feature), the A2A SDK and our own types, so
+    # replacing it is a cross-crate migration. Review by 2027-02-28.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; no vuln, no upgrade path; review 2027-02-28" },
+]
+
+[licenses]
+# Every license currently in the tree (`cargo deny list -l license`), all permissive.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

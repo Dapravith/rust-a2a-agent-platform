@@ -1,5 +1,9 @@
 name: CI
 
+# Runs on PRs (untrusted code: read-only token, no secrets, nothing pushed)
+# and on main. Publishing is a separate workflow (release.yml) that only
+# starts after this one succeeds on main.
+
 on:
   push:
     branches: [main]
@@ -11,6 +15,9 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
   backend:
@@ -30,18 +37,23 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      # Throwaway CI service container, not a secret.
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/a2a
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: backend
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Unit, integration, A2A interop (worker/reviewer/phase6b) and MCP suites.
       - run: cargo test --workspace --locked
 
   frontend:
@@ -50,8 +62,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -63,3 +77,51 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: ../scripts/check-secrets.sh
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # gitleaks scans the full history
+      - name: Rust advisories, licenses, sources (backend/deny.toml)
+        uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
+        with:
+          manifest-path: backend/Cargo.toml
+          command: check
+          arguments: --locked
+      - run: scripts/ci-install-scanners.sh "$RUNNER_TEMP/bin"
+      - name: Secrets in history (reviewed exceptions in .gitleaksignore)
+        run: |
+          "$RUNNER_TEMP/bin/gitleaks" git --no-banner --redact --exit-code 1 .
+      - name: Dockerfile and config misconfigurations
+        # Dockerfiles, workflows and (from 7C) Kubernetes manifests.
+        run: >-
+          "$RUNNER_TEMP/bin/trivy" config --exit-code 1 --severity HIGH,CRITICAL
+          --skip-dirs backend/target,frontend/node_modules .
+
+  images:
+    # Builds exactly what release.yml would publish, but never pushes.
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: scripts/ci-install-scanners.sh "$RUNNER_TEMP/bin"
+      - name: Build linux/amd64 images
+        run: |
+          for t in api worker-agent reviewer-agent; do
+            docker buildx build --platform linux/amd64 --load --target "$t" -t "a2a-$t:ci" backend/
+          done
+          docker buildx build --platform linux/amd64 --load --target portal -t a2a-portal:ci frontend/
+      - name: Image vulnerability scan
+        # Fails on fixable CRITICAL findings; HIGH is reported. A clean scan
+        # is not proof the image is secure.
+        run: |
+          for i in api worker-agent reviewer-agent portal; do
+            "$RUNNER_TEMP/bin/trivy" image --scanners vuln --severity HIGH,CRITICAL "a2a-$i:ci"
+            "$RUNNER_TEMP/bin/trivy" image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 "a2a-$i:ci"
+          done

@@ -82,11 +82,24 @@ async fn run() -> Result<(), String> {
         .map_err(|e| format!("bind {bind}: {e}"))?;
     tracing::info!(%bind, "mcp-server listening");
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| e.to_string())
+}
+
+/// SIGTERM (container stop) or SIGINT. Same contract as
+/// `agent_runtime::shutdown_signal`, kept local to avoid that dependency.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    if let Ok(mut term) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+        return;
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 #[tokio::main]

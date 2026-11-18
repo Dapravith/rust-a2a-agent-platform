@@ -1,0 +1,117 @@
+name: Release images
+
+# Publishes the pilot images to GHCR after CI passes on main, for the exact
+# commit CI tested. Inert until the repository variable PUBLISH_IMAGES is
+# "true" (owner opt-in). Never deploys: promotion is a reviewed GitOps PR.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      vars.PUBLISH_IMAGES == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { name: api, context: backend, target: api }
+          - { name: worker-agent, context: backend, target: worker-agent }
+          - { name: reviewer-agent, context: backend, target: reviewer-agent }
+          - { name: portal, context: frontend, target: portal }
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - name: Image name (GHCR needs lowercase)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/a2a-${{ matrix.name }}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          # Hostnames of every environment, so one digest promotes unchanged.
+          build-args: |
+            PORTAL_HOSTS=${{ vars.PORTAL_HOSTS || '127.0.0.1,localhost' }}
+          tags: ${{ env.IMAGE }}:sha-${{ env.SHA }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+          cache-from: type=gha,scope=${{ matrix.context }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.context }}
+      - run: scripts/ci-install-scanners.sh "$RUNNER_TEMP/bin"
+      - name: Scan the pushed digest
+        id: scan
+        run: |
+          ref="$IMAGE@${{ steps.build.outputs.digest }}"
+          "$RUNNER_TEMP/bin/trivy" image --scanners vuln --severity HIGH,CRITICAL --format json -o trivy.json "$ref"
+          "$RUNNER_TEMP/bin/trivy" image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 "$ref"
+          echo "summary=$(jq -c '[.Results[]?.Vulnerabilities[]?.Severity] | group_by(.) | map({(.[0]): length}) | add // {}' trivy.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: attest
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Release record
+        run: |
+          jq -n \
+            --arg image "$IMAGE" --arg digest "${{ steps.build.outputs.digest }}" \
+            --arg commit "$SHA" --arg run "${{ github.run_id }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg built "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg attestation "${{ steps.attest.outputs.attestation-url }}" \
+            --argjson scan '${{ steps.scan.outputs.summary }}' \
+            '{image:$image, digest:$digest, commit:$commit, workflow_run:$run, workflow_url:$run_url,
+              built_at:$built, provenance:$attestation, trivy_high_critical:$scan}' \
+            > "release-${{ matrix.name }}.json"
+          cat "release-${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.name }}
+          path: release-${{ matrix.name }}.json
+
+  record:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          merge-multiple: true
+      - name: Combined release manifest
+        run: |
+          jq -s 'map({(.image | split("/") | last): .}) | add' release-*.json | tee release.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-manifest
+          path: release.json
