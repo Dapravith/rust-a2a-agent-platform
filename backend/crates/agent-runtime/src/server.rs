@@ -352,15 +352,46 @@ impl ServeConfig {
     }
 }
 
+/// `RUST_LOG` filter (default `info`); `LOG_FORMAT=json` for one JSON object per line.
 pub fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    let builder = tracing_subscriber::fmt().with_env_filter(
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+    );
+    if std::env::var("LOG_FORMAT").is_ok_and(|v| v == "json") {
+        builder.json().init();
+    } else {
+        builder.init();
+    }
 }
 
-/// Serves one agent until Ctrl+C.
+/// Resolves on SIGTERM (what container runtimes and Kubernetes send) or
+/// SIGINT. A process running as PID 1 ignores SIGTERM unless it installs a
+/// handler, so waiting for Ctrl+C alone would end every pod stop in SIGKILL.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = tokio::signal::ctrl_c() => {}
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot install SIGTERM handler; Ctrl+C only");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    tracing::info!("shutdown signal received; draining connections");
+}
+
+/// Serves one agent until SIGTERM or Ctrl+C.
 pub async fn serve<S: Skill>(skill: S, cfg: ServeConfig) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(&cfg.bind)
         .await
@@ -369,9 +400,7 @@ pub async fn serve<S: Skill>(skill: S, cfg: ServeConfig) -> Result<(), String> {
     tracing::info!(agent = %name, bind = %cfg.bind, public_url = %cfg.public_url,
         inference = skill.inference_mode(), "A2A agent listening");
     axum::serve(listener, router(skill, &cfg.public_url))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| format!("server error: {e}"))
 }

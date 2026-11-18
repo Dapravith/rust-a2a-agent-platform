@@ -41,9 +41,7 @@ async fn run() -> Result<(), String> {
         .map_err(|e| format!("cannot bind {bind}: {e}"))?;
     tracing::info!(%bind, %public, "role agents listening");
     axum::serve(listener, router(&cfg, &public))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(agent_runtime::shutdown_signal())
         .await
         .map_err(|e| e.to_string())
 }

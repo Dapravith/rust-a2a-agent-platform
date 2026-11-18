@@ -101,9 +101,7 @@ async fn serve() -> Result<(), String> {
         listener,
         api::app_with(engine, eng, cfg.frontend_dir.as_deref()),
     )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+    .with_graceful_shutdown(agent_runtime::shutdown_signal())
     .await
     .map_err(|e| format!("server error: {e}"))
 }

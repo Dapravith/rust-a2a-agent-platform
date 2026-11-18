@@ -1,0 +1,3 @@
+# Reviewed false positives only (fingerprint = commit:file:rule:line).
+# llm.rs test config literal "test-key-0123456789" (PHASE6F.md S4).
+feed25bbf0d761baa1cdbd71d6fb3d89c6d7a6af:backend/crates/agent-runtime/src/llm.rs:generic-api-key:492
