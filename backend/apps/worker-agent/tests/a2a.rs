@@ -70,7 +70,8 @@ async fn drafts_over_a2a_and_task_is_retrievable() {
     assert_eq!(task.status.state, TaskState::Completed);
     let draft: DraftArtifact =
         decode_artifacts(task.artifacts.as_deref().unwrap(), DRAFT_ARTIFACT_NAME).unwrap();
-    assert!(draft.title.starts_with("Draft:"));
+    assert!(draft.title.starts_with("Mock draft:"));
+    assert!(draft.mock, "mock drafts must be flagged");
 
     let card = AgentCardResolver::new(None).resolve(&url).await.unwrap();
     let client = A2AClientFactory::builder()

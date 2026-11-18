@@ -33,6 +33,10 @@ sqlx = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
 worker-agent = { workspace = true }
 reviewer-agent = { workspace = true }
+mcp-server = { workspace = true }
+role-agents = { workspace = true }
+workspace = { workspace = true, features = ["test-fixture"] }
+tempfile = "=3.27.0"
 a2a-server = { workspace = true }
 futures = { workspace = true }
 

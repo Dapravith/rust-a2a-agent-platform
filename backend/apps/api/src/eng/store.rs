@@ -29,11 +29,13 @@ pub enum EngErrorCode {
     CandidateMismatch,
     BudgetExceeded,
     ProviderUnconfigured,
+    /// Cited MCP tool calls are missing, foreign, refused, or about another commit.
+    ToolEvidenceInvalid,
     InternalError,
 }
 
 impl EngErrorCode {
-    pub const ALL: [EngErrorCode; 11] = [
+    pub const ALL: [EngErrorCode; 12] = [
         Self::Interrupted,
         Self::AgentUnavailable,
         Self::AgentTimeout,
@@ -44,6 +46,7 @@ impl EngErrorCode {
         Self::CandidateMismatch,
         Self::BudgetExceeded,
         Self::ProviderUnconfigured,
+        Self::ToolEvidenceInvalid,
         Self::InternalError,
     ];
     pub fn as_str(self) -> &'static str {
@@ -58,6 +61,7 @@ impl EngErrorCode {
             Self::CandidateMismatch => "candidate_mismatch",
             Self::BudgetExceeded => "budget_exceeded",
             Self::ProviderUnconfigured => "provider_unconfigured",
+            Self::ToolEvidenceInvalid => "tool_evidence_invalid",
             Self::InternalError => "internal_error",
         }
     }
@@ -770,4 +774,27 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<Detail, StoreError> {
         approvals,
         audit,
     })
+}
+
+/// One MCP audit row, as the orchestrator needs it to verify evidence.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ToolCallRow {
+    pub id: Uuid,
+    pub run_id: Option<Uuid>,
+    pub role: Option<String>,
+    pub tool: String,
+    pub outcome: String,
+    pub head_sha: Option<String>,
+    pub exit_code: Option<i32>,
+}
+
+/// Audit rows for the given ids (written by the MCP server, read-only here).
+pub async fn tool_calls(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<ToolCallRow>, StoreError> {
+    Ok(sqlx::query_as::<_, ToolCallRow>(
+        "SELECT id, run_id, role, tool, outcome, head_sha, exit_code \
+         FROM eng_tool_calls WHERE id = ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?)
 }

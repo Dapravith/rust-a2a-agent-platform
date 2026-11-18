@@ -1,6 +1,7 @@
 ---
 // Worker result: title, summary, Markdown body (rendered safely on the
 // server) and assumptions. Raw Markdown is available through Copy.
+import Callout from "../../../components/ui/Callout.astro";
 import Card from "../../../components/ui/Card.astro";
 import CopyButton from "../../../components/ui/CopyButton.astro";
 import EmptyState from "../../../components/ui/EmptyState.astro";
@@ -21,6 +22,12 @@ const { draft, status, working } = Astro.props;
   {
     draft ? (
       <article class="draft">
+        {draft.mock && (
+          <Callout tone="info" title="Mock output: no AI model was used" class="draft__mock">
+            The Worker runs with <code>INFERENCE_MODE=mock</code>, so this draft is a fixed placeholder, not an answer to your
+            question. The workflow and A2A exchange are real; only the text is canned.
+          </Callout>
+        )}
         <h3 class="draft__title">{draft.title}</h3>
         <p class="draft__summary">{draft.summary}</p>
         <div class="prose draft__content" set:html={renderMarkdown(draft.content)} />
@@ -47,6 +54,9 @@ const { draft, status, working } = Astro.props;
 </Card>
 
 <style>
+  .draft__mock {
+    margin-bottom: var(--space-4);
+  }
   .draft__title {
     font-size: var(--text-xl);
     overflow-wrap: anywhere;

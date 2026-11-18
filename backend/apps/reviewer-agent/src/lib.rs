@@ -161,6 +161,7 @@ mod tests {
                 summary: "Summary".into(),
                 content: content.into(),
                 assumptions: vec![],
+                mock: false,
             },
         }
     }

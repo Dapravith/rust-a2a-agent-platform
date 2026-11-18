@@ -166,7 +166,7 @@ impl Orchestrator {
                 }
                 Err(e) => return Err(e.into()),
             };
-            let mut input = build_input(wf, role, attempt, correlation_id, arts);
+            let mut input = build_input(wf, role, attempt, run_id, correlation_id, arts);
             input.base_commit_sha = self.base_commit_sha.clone();
             let result = tokio::time::timeout(self.stage_timeout, agent.run(input)).await;
             let (code, msg, retryable) = match result {
@@ -184,7 +184,15 @@ impl Orchestrator {
                     }
                 },
                 Ok(Ok(out)) => match self.validate(wf, role, &ident, &out, arts) {
-                    Ok(v) => return self.commit(wf, role, &ident, run_id, &out, v, arts).await,
+                    Ok(v) => match self
+                        .verify_tool_evidence(wf, role, run_id, agent.as_ref(), &out)
+                        .await
+                    {
+                        Ok(()) => {
+                            return self.commit(wf, role, &ident, run_id, &out, v, arts).await;
+                        }
+                        Err((code, msg)) => (code, msg, false),
+                    },
                     Err((code, msg)) => (code, msg, false),
                 },
             };
@@ -322,6 +330,74 @@ impl Orchestrator {
         })
     }
 
+    /// Cross-checks the MCP tool calls an output cites against the MCP
+    /// server's append-only audit. Every cited id must exist, belong to *this*
+    /// run and role, have been allowed, and (for reviewer/QA) have run against
+    /// the candidate commit. An MCP-backed adapter must also cite the tool its
+    /// role cannot work without: `repository.diff` for a review, `testing.run`
+    /// for QA. Anything else fails the stage with `tool_evidence_invalid`.
+    async fn verify_tool_evidence(
+        &self,
+        wf: &EngWorkflow,
+        role: Role,
+        run_id: Uuid,
+        agent: &dyn RoleAgent,
+        out: &AgentOutput,
+    ) -> Result<(), (EngErrorCode, String)> {
+        let required = agent.requires_tool_evidence();
+        if out.tool_calls.is_empty() && !required {
+            return Ok(());
+        }
+        let bad = |m: String| (EngErrorCode::ToolEvidenceInvalid, m);
+        let mut ids = out.tool_calls.clone();
+        ids.sort();
+        ids.dedup();
+        let rows = store::tool_calls(&self.pool, &ids)
+            .await
+            .map_err(|e| (EngErrorCode::InternalError, e.to_string()))?;
+        if rows.len() != ids.len() {
+            return Err(bad(format!(
+                "{} of {} cited tool calls are not in the MCP audit",
+                ids.len() - rows.len(),
+                ids.len()
+            )));
+        }
+        let candidate = wf.candidate_commit_sha.as_deref();
+        for r in &rows {
+            if r.run_id != Some(run_id) || r.role.as_deref() != Some(role.as_str()) {
+                return Err(bad(format!(
+                    "tool call {} belongs to another run or role",
+                    r.id
+                )));
+            }
+            if r.outcome != "allowed" {
+                return Err(bad(format!("tool call {} was {}", r.id, r.outcome)));
+            }
+            if matches!(role, Role::CodeReviewer | Role::QaTester)
+                && r.head_sha.as_deref() != candidate
+            {
+                return Err(bad(format!(
+                    "tool call {} ran against another commit",
+                    r.id
+                )));
+            }
+        }
+        let needed = match role {
+            Role::CodeReviewer => Some("repository.diff"),
+            Role::QaTester => Some("testing.run"),
+            _ => None,
+        };
+        if let (true, Some(tool)) = (required, needed)
+            && !rows.iter().any(|r| r.tool == tool)
+        {
+            return Err(bad(format!(
+                "no audited `{tool}` call backs this {}",
+                role.as_str()
+            )));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn commit(
         &self,
@@ -380,7 +456,7 @@ impl Orchestrator {
             None,
             locked.version,
             json!({"run_id": run_id, "artifact_id": artifact_id, "kind": v.kind.as_str(), "content_hash": hash,
-                   "commit_sha": v.commit_sha, "tools": out.tool_requests}),
+                   "commit_sha": v.commit_sha, "tools": out.tool_requests, "tool_calls": out.tool_calls}),
         )
         .await?;
         if let Some(event) = v.event {
@@ -449,6 +525,7 @@ fn build_input(
     wf: &EngWorkflow,
     role: Role,
     attempt: i32,
+    run_id: Uuid,
     correlation_id: Uuid,
     arts: &[EngArtifact],
 ) -> RoleInput {
@@ -481,6 +558,7 @@ fn build_input(
     };
     RoleInput {
         workflow_id: wf.id,
+        run_id,
         correlation_id,
         role,
         attempt,

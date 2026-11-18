@@ -6,6 +6,8 @@
 //! rejects unknown fields and enforces the size/shape rules in [`Validate`].
 //! Agent output is treated as untrusted input everywhere.
 
+pub mod role;
+
 use a2a::{Artifact, Part, PartContent};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -108,6 +110,11 @@ pub struct DraftArtifact {
     pub content: String,
     #[serde(default)]
     pub assumptions: Vec<String>,
+    /// `true` when the Worker ran in mock mode: no model was called and the
+    /// content is a fixed template. Set by the Worker itself, never by a model
+    /// (the real-model path forces it to `false`). Absent in older rows → `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mock: bool,
 }
 
 impl Validate for DraftArtifact {
@@ -335,6 +342,7 @@ mod tests {
             summary: "Field rules for campaigns".into(),
             content: "- name: required".into(),
             assumptions: vec!["USD only".into()],
+            mock: false,
         }
     }
 

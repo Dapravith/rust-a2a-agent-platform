@@ -122,6 +122,7 @@ fn out(content: Value, tools: Vec<ToolRequest>) -> AgentOutput {
         tool_requests: tools,
         a2a_task_id: None,
         usage: Usage::default(),
+        tool_calls: vec![],
     }
 }
 

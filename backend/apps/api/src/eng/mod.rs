@@ -5,6 +5,7 @@
 //! persists them ([`store`]), runs agent stages ([`orchestrator`]), records
 //! human decisions ([`approval`]) and exposes `/api/eng` ([`routes`]).
 
+pub mod a2a_role;
 pub mod agents;
 pub mod approval;
 pub mod auth;

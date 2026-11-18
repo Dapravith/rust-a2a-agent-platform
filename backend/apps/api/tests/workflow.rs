@@ -266,7 +266,13 @@ async fn full_workflow_completes_and_persists(pool: PgPool) {
     // needs_changes is a successful review, not a failure.
     assert_eq!(wf["verdict"], "needs_changes");
     assert!(wf["error"].is_null());
-    assert!(wf["draft"]["title"].as_str().unwrap().starts_with("Draft:"));
+    assert!(
+        wf["draft"]["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("Mock draft:")
+    );
+    assert_eq!(wf["draft"]["mock"], true, "mock flag must reach the API");
     assert_eq!(wf["review"]["verdict"], "needs_changes");
     assert!(!wf["review"]["findings"].as_array().unwrap().is_empty());
     let runs = wf["runs"].as_array().unwrap();
@@ -671,7 +677,13 @@ async fn expect_reviewer_failure(pool: PgPool, reviewer: String, needle: &str) {
     assert_eq!(runs[1]["agent"], "reviewer");
     assert_eq!(runs[1]["status"], "failed");
     // The Worker's draft survives a Reviewer failure; no review is invented.
-    assert!(wf["draft"]["title"].as_str().unwrap().starts_with("Draft:"));
+    assert!(
+        wf["draft"]["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("Mock draft:")
+    );
+    assert_eq!(wf["draft"]["mock"], true, "mock flag must reach the API");
     assert!(wf["review"].is_null());
     assert!(wf["verdict"].is_null());
 }

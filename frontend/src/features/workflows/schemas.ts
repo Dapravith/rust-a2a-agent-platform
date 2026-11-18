@@ -47,6 +47,8 @@ export const draftSchema = z.object({
   summary: z.string(),
   content: z.string(),
   assumptions: z.array(z.string()),
+  // Set by the Worker in mock mode (no model called). Absent on real and older drafts.
+  mock: z.boolean().optional().default(false),
 });
 
 export const findingSchema = z.object({
