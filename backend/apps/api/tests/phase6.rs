@@ -1051,3 +1051,34 @@ async fn every_error_code_is_accepted_by_the_schema(pool: PgPool) {
         );
     }
 }
+
+/// Engineering responses (requirements, approvals, audit) must never be
+/// cached, on success or error, under both mount points.
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn eng_responses_are_not_cacheable(pool: PgPool) {
+    let base = serve_api(&pool, None, Arc::new(api::eng::auth::Disabled)).await;
+    let missing = Uuid::now_v7();
+    for (method, path, status) in [
+        ("GET", "/api/eng/status".to_owned(), 200),
+        ("GET", "/api/v1/eng/workflows".to_owned(), 200),
+        ("GET", format!("/api/eng/workflows/{missing}"), 404),
+        ("POST", "/api/eng/workflows".to_owned(), 503),
+    ] {
+        let client = reqwest::Client::new();
+        let req = match method {
+            "POST" => client
+                .post(format!("{base}{path}"))
+                .json(&json!({"title": "t", "requirements": REQUIREMENTS})),
+            _ => client.get(format!("{base}{path}")),
+        };
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), status, "{method} {path}");
+        assert_eq!(
+            r.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store"),
+            "{method} {path}"
+        );
+    }
+}

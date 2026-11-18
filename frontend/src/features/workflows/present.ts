@@ -1,10 +1,9 @@
 // Presentation model for a workflow: labels, the execution timeline and failure
 // guidance. Everything is derived from fields Rust returns (status, runs,
 // timestamps, error_code, failed_stage); no progress is estimated or invented.
+import type { Tone } from "../../components/ui/tone.ts";
 import { formatDuration } from "../../lib/format.ts";
 import type { AgentRole, AgentRun, Severity, WorkflowDetail, WorkflowStatus, Workflow } from "./schemas.ts";
-
-export type Tone = "neutral" | "info" | "success" | "warning" | "error";
 
 export const STATUS_LABEL: Record<WorkflowStatus, string> = {
   queued: "Queued",
@@ -29,10 +28,8 @@ export const SEVERITY_ORDER: Record<Severity, number> = { high: 0, medium: 1, lo
 
 export const AGENT_LABEL: Record<AgentRole, string> = { worker: "Worker", reviewer: "Reviewer" };
 
-// ---------------------------------------------------------------------------
 // Failure guidance, keyed on the stable `error_code` values from
 // backend/apps/api/src/error_code.rs. Unknown codes fall back to a generic text.
-// ---------------------------------------------------------------------------
 
 export interface FailureCopy {
   title: string;
@@ -110,9 +107,7 @@ export function describeFailure(code: string | null): FailureCopy {
   return (code && FAILURES[code]) || { title: "The workflow failed", guidance: RETRY };
 }
 
-// ---------------------------------------------------------------------------
-// Timeline: Queued → Worker → Reviewer → Completed/Failed
-// ---------------------------------------------------------------------------
+// Timeline: Queued → Worker → Reviewer → Completed/Failed.
 
 export type StepState = "complete" | "current" | "failed" | "upcoming" | "skipped";
 

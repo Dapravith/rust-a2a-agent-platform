@@ -85,10 +85,6 @@ export const agentInfoSchema = z.object({
 
 export const agentsSchema = z.object({ agents: z.array(agentInfoSchema) });
 
-export const errorEnvelopeSchema = z.object({
-  error: z.object({ code: z.string(), message: z.string() }),
-});
-
 export type WorkflowStatus = z.infer<typeof workflowStatus>;
 export type Verdict = z.infer<typeof verdict>;
 export type Severity = z.infer<typeof severity>;

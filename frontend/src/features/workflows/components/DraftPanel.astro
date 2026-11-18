@@ -6,7 +6,7 @@ import Card from "../../../components/ui/Card.astro";
 import CopyButton from "../../../components/ui/CopyButton.astro";
 import EmptyState from "../../../components/ui/EmptyState.astro";
 import { renderMarkdown } from "../../../lib/markdown.ts";
-import type { Draft, WorkflowStatus } from "../../workflows/schemas.ts";
+import type { Draft, WorkflowStatus } from "../schemas.ts";
 
 interface Props {
   draft: Draft | null;

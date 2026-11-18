@@ -2,10 +2,10 @@
 // Reviewer result: verdict, summary and findings (most severe first).
 import Card from "../../../components/ui/Card.astro";
 import EmptyState from "../../../components/ui/EmptyState.astro";
-import WorkflowBadge from "../../workflows/components/WorkflowBadge.astro";
+import WorkflowBadge from "./WorkflowBadge.astro";
 import { plural } from "../../../lib/format.ts";
-import { SEVERITY_LABEL, SEVERITY_ORDER } from "../../workflows/present.ts";
-import type { Review, Severity, WorkflowStatus } from "../../workflows/schemas.ts";
+import { SEVERITY_LABEL, SEVERITY_ORDER } from "../present.ts";
+import type { Review, Severity, WorkflowStatus } from "../schemas.ts";
 
 interface Props {
   review: Review | null;

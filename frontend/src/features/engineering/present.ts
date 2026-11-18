@@ -1,5 +1,5 @@
 // Pure presentation helpers for engineering workflows (unit-tested).
-import type { Tone } from "../workflows/present.ts";
+import type { Tone } from "../../components/ui/tone.ts";
 import type { EngRun, ToolCall } from "./schemas.ts";
 
 const STATUS: Record<string, { label: string; tone: Tone }> = {

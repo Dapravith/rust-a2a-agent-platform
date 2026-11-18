@@ -13,5 +13,7 @@ pub mod mcp_control;
 pub mod orchestrator;
 pub mod providers;
 pub mod routes;
+// Simulated agents: tests only, never compiled into `api serve`.
+#[cfg(any(test, feature = "simulation"))]
 pub mod sim;
 pub mod store;

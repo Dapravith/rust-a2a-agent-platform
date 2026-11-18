@@ -247,14 +247,16 @@ pub async fn create(
         .await?;
     audit(
         &mut tx,
-        wf.id,
-        "human",
-        requested_by,
-        "workflow_submitted",
-        None,
-        Some("draft"),
-        wf.version,
-        json!({}),
+        NewAuditEvent {
+            workflow_id: wf.id,
+            actor_kind: "human",
+            actor_id: requested_by,
+            action: "workflow_submitted",
+            from: None,
+            to: Some("draft"),
+            version: wf.version,
+            detail: json!({}),
+        },
     )
     .await?;
     tx.commit().await?;
@@ -283,31 +285,32 @@ pub async fn lock(tx: &mut Tx<'_>, id: Uuid) -> Result<EngWorkflow, StoreError> 
         .ok_or(StoreError::NotFound)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn audit(
-    tx: &mut Tx<'_>,
-    workflow_id: Uuid,
-    actor_kind: &str,
-    actor_id: &str,
-    action: &str,
-    from: Option<&str>,
-    to: Option<&str>,
-    version: i64,
-    detail: Value,
-) -> Result<(), StoreError> {
+/// One `eng_audit_events` row. `from`/`to` are set only for state transitions.
+pub struct NewAuditEvent<'a> {
+    pub workflow_id: Uuid,
+    pub actor_kind: &'a str,
+    pub actor_id: &'a str,
+    pub action: &'a str,
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+    pub version: i64,
+    pub detail: Value,
+}
+
+pub async fn audit(tx: &mut Tx<'_>, event: NewAuditEvent<'_>) -> Result<(), StoreError> {
     sqlx::query(
         "INSERT INTO eng_audit_events (id, workflow_id, actor_kind, actor_id, action, from_status, \
          to_status, workflow_version, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(Uuid::now_v7())
-    .bind(workflow_id)
-    .bind(actor_kind)
-    .bind(actor_id)
-    .bind(action)
-    .bind(from)
-    .bind(to)
-    .bind(version)
-    .bind(detail)
+    .bind(event.workflow_id)
+    .bind(event.actor_kind)
+    .bind(event.actor_id)
+    .bind(event.action)
+    .bind(event.from)
+    .bind(event.to)
+    .bind(event.version)
+    .bind(event.detail)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -370,14 +373,16 @@ pub async fn transition(
     }
     audit(
         tx,
-        wf.id,
-        actor.kind(),
-        actor.id(),
-        event.as_str(),
-        Some(from.status.as_str()),
-        Some(to.status.as_str()),
-        to.version,
-        detail,
+        NewAuditEvent {
+            workflow_id: wf.id,
+            actor_kind: actor.kind(),
+            actor_id: actor.id(),
+            action: event.as_str(),
+            from: Some(from.status.as_str()),
+            to: Some(to.status.as_str()),
+            version: to.version,
+            detail,
+        },
     )
     .await?;
     Ok(to)
@@ -531,15 +536,17 @@ pub async fn start_run(
         .await?;
     audit(
         &mut tx,
-        workflow_id,
-        "agent",
-        s.agent_id,
-        "agent_run_started",
-        None,
-        None,
-        wf.version,
-        json!({"run_id": id, "role": s.role.as_str(), "stage": key, "attempt": s.attempt,
+        NewAuditEvent {
+            workflow_id,
+            actor_kind: "agent",
+            actor_id: s.agent_id,
+            action: "agent_run_started",
+            from: None,
+            to: None,
+            version: wf.version,
+            detail: json!({"run_id": id, "role": s.role.as_str(), "stage": key, "attempt": s.attempt,
                "provider": s.provider, "model": s.model, "correlation_id": correlation}),
+        },
     )
     .await?;
     tx.commit().await?;
@@ -572,14 +579,16 @@ pub async fn fail_run(
     };
     audit(
         &mut tx,
-        workflow_id,
-        "agent",
-        &agent_id,
-        "agent_run_failed",
-        None,
-        None,
-        wf.version,
-        json!({"run_id": run_id, "error_code": code.as_str(), "error": msg}),
+        NewAuditEvent {
+            workflow_id,
+            actor_kind: "agent",
+            actor_id: &agent_id,
+            action: "agent_run_failed",
+            from: None,
+            to: None,
+            version: wf.version,
+            detail: json!({"run_id": run_id, "error_code": code.as_str(), "error": msg}),
+        },
     )
     .await?;
     tx.commit().await?;
