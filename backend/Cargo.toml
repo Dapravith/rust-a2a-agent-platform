@@ -7,6 +7,9 @@ members = [
     "crates/contracts",
     "crates/agent-runtime",
     "crates/engineering",
+    "crates/workspace",
+    "apps/mcp-server",
+    "apps/role-agents",
 ]
 
 [workspace.package]
@@ -41,6 +44,9 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 contracts = { path = "crates/contracts" }
 agent-runtime = { path = "crates/agent-runtime" }
 engineering = { path = "crates/engineering" }
+workspace = { path = "crates/workspace" }
+mcp-server = { path = "apps/mcp-server" }
+role-agents = { path = "apps/role-agents" }
 worker-agent = { path = "apps/worker-agent" }
 reviewer-agent = { path = "apps/reviewer-agent" }
 

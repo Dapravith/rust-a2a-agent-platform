@@ -185,11 +185,25 @@ Regression (full workspace, `cargo fmt --check`, `clippy -D warnings`, `cargo te
 
 The P0 Worker → Reviewer workflow still passes its whole suite, so it is preserved.
 
+**Re-run after M4 (2026-11-18): NOT CLEAN; environment collision, verdict pending.** fmt and clippy PASS.
+Tests: `engineering` 25, `phase6` 21, `phase6_provider` 9, `workflow.rs` 25, agents, contracts and runtime unit
+tests all PASS. Two suites failed:
+- `agent-runtime/tests/llm_stub.rs`: 1 of 11 failed (`unreachable_provider_is_typed`). It passed 11/11 on re-run.
+- `phase3.rs`: 12 of 17 failed, then 9 of 17 on re-run. Every failure is in sqlx test-database setup
+  (`failed to connect to setup test database`: "database … already exists", "is being accessed by other users",
+  duplicate `pg_database_datname_index`), or follows from it.
+
+Cause found: a second, unrelated Claude Code session was running its own `cargo test --workspace` against the
+same Postgres at the same time. Concurrent sqlx test runs create and clean up `_sqlx_test_*` databases on that
+server, so they collide. The M4 changes touch neither `phase3.rs` nor the P0 code it exercises; the only shared
+code is the LLM client refactor, and its own 11 stub tests pass. **`phase3.rs` must still be re-run alone** (no
+other test process on the database) before this regression counts as PASS.
+
 ### 8b. Mode B: provider contract tests (M4)
 
 `cargo test -p api --test phase6_provider`: **9 passed**, plus 2 unit tests in `eng::providers::anthropic`.
 The test double is a local axum server implementing `POST /v1/messages`. It asserts the key and version headers
-and records every request body. The orchestrator and Postgres are real.
+and records every request body. The orc hestrator and Postgres are real.
 
 | Requirement | Test | Evidence | Result |
 |---|---|---|---|
@@ -224,7 +238,7 @@ Coordinator, because the Developer has no provider until M5.
 | Humans can inspect the workflow | PARTIAL | `GET /api/eng/workflows/{id}` returns runs, artifacts, gates, approvals, audit; portal (M8) not built |
 | Restart recovery preserves workflow + approval state | PASS (in-process) | N9; a killed-process test like Phase 3's is still to add |
 | Failed stages cannot become approved deliveries | PASS | gates + N4, failed-evidence test |
-| Security and integration regression tests pass | PASS (Modes A + B and the existing suites) | §8a, §8b; Mode C BLOCKED |
+| Security and integration regression tests pass | **UNVERIFIED after M4** | §8a: `phase3.rs` blocked by a concurrent test run on the shared DB; all other suites PASS; Mode C BLOCKED |
 
 **Overall Phase 6: NOT COMPLETE.** M1–M3 PASS. M4 PARTIAL: Mode B PASS, Mode C BLOCKED (no credentials), and no
 coding-agent runtime yet. M7 logic PASS, production BLOCKED (no IdP). M5, M6 (real evidence), M8, M9 and M10

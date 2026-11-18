@@ -91,5 +91,5 @@ test("signature changes exactly when visible state changes", () => {
   const a = wf({ runs: [run("worker", "running")] });
   assert.equal(detailSignature(a), detailSignature({ ...a }));
   assert.notEqual(detailSignature(a), detailSignature({ ...a, runs: [run("worker", "completed")] }));
-  assert.notEqual(detailSignature(a), detailSignature({ ...a, draft: { title: "t", summary: "s", content: "c", assumptions: [] } }));
+  assert.notEqual(detailSignature(a), detailSignature({ ...a, draft: { title: "t", summary: "s", content: "c", assumptions: [], mock: false } }));
 });

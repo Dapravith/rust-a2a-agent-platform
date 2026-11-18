@@ -252,6 +252,7 @@ impl RoleAgent for AnthropicRoleAgent {
                 tool_requests: vec![],
                 a2a_task_id: None,
                 usage,
+                tool_calls: vec![],
             })
         })
     }
@@ -303,6 +304,7 @@ mod tests {
     fn delimiter_cannot_be_closed_by_content() {
         let input = RoleInput {
             workflow_id: uuid::Uuid::nil(),
+            run_id: uuid::Uuid::nil(),
             correlation_id: uuid::Uuid::nil(),
             role: Role::ProjectManager,
             attempt: 1,

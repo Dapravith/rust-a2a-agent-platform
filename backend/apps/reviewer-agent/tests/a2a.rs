@@ -65,6 +65,7 @@ fn draft() -> DraftArtifact {
         summary: "Field rules".into(),
         content: "- name: required".into(),
         assumptions: vec![],
+        mock: false,
     }
 }
 

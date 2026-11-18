@@ -29,6 +29,9 @@ pub struct AgentIdentity {
 #[derive(Debug, Clone)]
 pub struct RoleInput {
     pub workflow_id: Uuid,
+    /// The `eng_agent_runs` row of this attempt. MCP capability tokens bind
+    /// to it, so tool-call audit rows correlate with exactly one run.
+    pub run_id: Uuid,
     pub correlation_id: Uuid,
     pub role: Role,
     pub attempt: i32,
@@ -71,6 +74,9 @@ pub struct AgentOutput {
     pub tool_requests: Vec<ToolRequest>,
     pub a2a_task_id: Option<String>,
     pub usage: Usage,
+    /// MCP tool-call ids the output relies on. The orchestrator verifies each
+    /// against the MCP server's audit (`eng_tool_calls`); the agent's word is not enough.
+    pub tool_calls: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +99,11 @@ pub struct AgentError {
 pub trait RoleAgent: Send + Sync {
     fn identity(&self) -> AgentIdentity;
     fn run(&self, input: RoleInput) -> BoxFut<'_, Result<AgentOutput, AgentError>>;
+    /// `true` for adapters that work through MCP. Their output must then be
+    /// backed by audited tool calls of the run (see `Orchestrator::verify_tool_evidence`).
+    fn requires_tool_evidence(&self) -> bool {
+        false
+    }
 }
 
 /// Which artifact kinds a role sees as input (least privilege on context).

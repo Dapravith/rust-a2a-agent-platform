@@ -43,3 +43,19 @@
 **Rejected alternatives:** a workflow engine / message broker (not needed for one orchestrator per database); one microservice per role (roles are policy, agents are already independent processes when remote); storing model reasoning (only observable outputs are stored).
 
 **Consequences:** No new infrastructure. New risk surface: code execution by agents (M5) needs a real isolation boundary before any real provider is enabled; human approvals stay BLOCKED until an IdP (OIDC) is integrated.
+### ADR-004: MCP tool server and the check-execution boundary (Phase 6B)
+
+**Status:** Accepted for deterministic fixtures. **Not** accepted for running LLM-generated code (see Consequences).
+
+**Decision:**
+- One new private process, `apps/mcp-server`, built on the official MCP Rust SDK (`rmcp`, pinned `=3.11.0`), Streamable HTTP, loopback bind only. It is the **only** process that reads or runs anything in an agent workspace. Tools: `repository.read_file`, `repository.diff`, `testing.run` (closed set in `engineering::mcp::McpTool`).
+- Every request carries a per-run capability token (HMAC-SHA256, ≤ 15 min) issued by the orchestrator and bound to workflow, run, role, agent, workspace, granted tools, path scope and base SHA. It is verified at the HTTP edge. Every call is then authorized by `engineering::mcp::authorize_call`, which reuses `roles::authorize`, before anything executes. A token can narrow a role, never widen it, and an over-granting token cannot be issued or verified.
+- Workspace facts (HEAD SHA, diff, patch digest, exit code, log digest) are computed by the server (`crates/workspace`) and recorded in `eng_tool_calls` (append-only, written through role `a2a_mcp` with INSERT only). If the audit write fails, the result is withheld.
+- Git runs as an argv with a cleared environment, no global or system config, hooks, fsmonitor, external diff or textconv. File reads refuse `..`, absolute paths, `.git`, symlinks along the path, non-regular files, and files over 256 KiB.
+- `testing.run` maps a check id to a fixed argv (`roles::ALLOWED_CHECKS`) and runs it in a disposable Docker container: `--network none`, `--read-only`, `--cap-drop ALL`, `no-new-privileges`, user `65534`, `--ipc none`, PID/memory/CPU limits, workspace bind-mounted **read-only**, `/tmp` tmpfs, a digest-pinned image, a timeout that kills the container, and capped, hashed output. Without a configured image the tool answers `sandbox_unavailable`. There is no host fallback.
+
+**Rejected alternatives:** tools inside each agent process (no single enforcement point); shell strings (injection); the `#[tool]` macro router (it rejects bad calls before our code runs, so those refusals would go unaudited); a container per agent run with the provider CLI inside it (deferred to M5/6C).
+
+**Consequences:** One more private process (now four Rust processes plus the portal). A container shares the host kernel (on macOS, the Docker VM's), so it is not an adequate boundary for code written by an LLM. Real Developer/QA runs on LLM output stay **BLOCKED** until a microVM (Firecracker / gVisor on Linux) or a disposable VM per run is available. The live boundary test (`workspace` `live_sandbox_runs_checks_without_network`) needs a working Docker daemon and `A2A_SANDBOX_IMAGE`.
+
+**Amendment (2026-11-18, owner decision D3):** Docker on the macOS dev host is accepted as the boundary for running LLM-written code **only** in live development tests on the throwaway fixture repository (`backend/fixtures/sample-crate`), with the flags above. It is not accepted for real repositories or any shared or production environment; those still need a microVM or a disposable VM.

@@ -1,0 +1,28 @@
+[package]
+name = "workspace"
+description = "Phase 6B: isolated agent workspaces (git-backed, argv-only) and the sandboxed check runner"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+engineering = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "fs"] }
+futures = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+sha2 = "=0.10.9"
+hex = "=0.4.3"
+
+[features]
+# Real git fixture for tests in this and other crates. Never enable in a binary.
+test-fixture = []
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[lints]
+workspace = true

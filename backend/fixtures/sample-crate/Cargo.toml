@@ -1,0 +1,11 @@
+# Test fixture for Phase 6B/6C workspace, MCP and sandbox tests. Not a member
+# of the backend workspace; no dependencies, so it builds offline in the sandbox.
+[package]
+name = "sample-crate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[workspace]
