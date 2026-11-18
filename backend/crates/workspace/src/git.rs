@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::WorkspaceError;
@@ -66,4 +67,26 @@ pub async fn is_ancestor(dir: &Path, base: &str, head: &str) -> Result<bool, Wor
             "merge-base failed (unknown commit?)".into(),
         )),
     }
+}
+
+/// Runs git with `input` on stdin; a non-zero exit is an error.
+pub async fn run_stdin(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, WorkspaceError> {
+    let mut c = command(dir, args);
+    c.stdin(Stdio::piped());
+    let work = async {
+        let mut child = c.spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input).await?;
+            drop(stdin);
+        }
+        child.wait_with_output().await
+    };
+    let out = tokio::time::timeout(GIT_TIMEOUT, work)
+        .await
+        .map_err(|_| WorkspaceError::Git("timed out".into()))??;
+    if !out.status.success() {
+        let msg = String::from_utf8_lossy(&out.stderr);
+        return Err(WorkspaceError::Git(msg.chars().take(500).collect()));
+    }
+    Ok(out.stdout)
 }

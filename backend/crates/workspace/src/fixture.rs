@@ -71,3 +71,28 @@ pub async fn create(
         candidate_sha,
     })
 }
+
+/// Only the base commit on `main`: the starting point for a Developer run.
+pub async fn create_base(
+    root: &Path,
+    id: uuid::Uuid,
+) -> Result<(Workspace, String), WorkspaceError> {
+    let dir = root.join(id.to_string());
+    copy_dir(&source_dir(), &dir)?;
+    git::run(&dir, &["init", "-q", "-b", "main"]).await?;
+    commit(&dir, "base").await?;
+    let ws = Workspace::open(root, id)?;
+    let base = ws.head_sha().await?;
+    Ok((ws, base))
+}
+
+/// The fixture's candidate change as a git-format patch against the base
+/// (what a Developer agent would submit through `workspace.apply_patch`).
+pub async fn candidate_patch() -> Result<String, WorkspaceError> {
+    let tmp = std::env::temp_dir().join(format!("a2a-fixture-{}", uuid::Uuid::now_v7()));
+    let wf = uuid::Uuid::now_v7();
+    let f = create(&tmp, uuid::Uuid::now_v7(), wf).await?;
+    let d = f.workspace.diff(&f.base_sha).await?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(d.patch)
+}

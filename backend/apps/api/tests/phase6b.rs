@@ -90,6 +90,7 @@ async fn stack(pool: &PgPool) -> Stack {
         workspaces_root: root.path().canonicalize().unwrap(),
         audit: Arc::new(PgAudit::new(pool.clone())),
         runner: None,
+        locks: Default::default(),
     });
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mcp_url = format!("http://{}/mcp", l.local_addr().unwrap());

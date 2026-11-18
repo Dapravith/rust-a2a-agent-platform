@@ -1,132 +1,93 @@
-# Phase 6C: Phase 6B readiness audit and corrective backlog
+# Phase 6C: Phase 6B readiness re-audit (after corrective backlog C1–C7)
 
-Date: 2026-11-18 · Branch `phase6/native-rust-protocols` @ `49c8773` (working tree: `docs/PHASE6.md` modified, `docs/PHASE6B.md` untracked, both left untouched) · Rust 1.100.0 · Postgres 17 at `127.0.0.1:54329`
+Date: 2026-11-18 · Branch `phase6/native-rust-protocols` @ `49c8773` + uncommitted Phase 6B work (nothing committed) · Rust 1.100.0 · Node 24.21.0 (per `.nvmrc`) · Postgres 17
+Test database: a private throwaway container `a2a-6b-testdb` (`127.0.0.1:54339`, tmpfs). The shared database at `:54329` was in use by another session's test run, and concurrent sqlx runs on one server collide (PHASE6 §8a).
 
-**Verdict: Phase 6B is NOT STARTED. Its mandatory checks fail. Following the Phase 6C instruction ("if mandatory Phase 6B checks fail, stop and provide a corrective backlog; do not begin provider integration over an unverified foundation"), I wrote no Phase 6C code.** This file holds the audit, the provider assessment from local evidence, the adapter design that the backlog leads to, and the ordered work that has to land first.
+**Verdict: the Phase 6B corrective backlog C1–C7 is done and verified, but Phase 6B itself is still incomplete (its M2–M10). Following the 6C instruction ("if mandatory Phase 6B checks fail, stop and provide a corrective backlog"), no Phase 6C provider code was written.** Also, no provider credential exists in this environment, so the 6C live gate could not pass even with the foundation complete.
 
-## 1. Phase 6B quality audit (Step 1)
+## 1. Step 1 audit
 
 | # | Check | Result | Evidence (this session) |
 |---|---|---|---|
-| 1 | Git status / structure | PASS | Only the two doc changes above; workspace = `api`, `worker-agent`, `reviewer-agent`, `contracts`, `agent-runtime`, `engineering` |
-| 2 | PRD / ADRs read | PASS | `A2A_PRD.md` §9, `docs/ADR.md` ADR-003, `docs/PHASE6.md`, `docs/PHASE6B.md` |
-| 3 | Phase 6B implementation and evidence | **FAIL** | `docs/PHASE6B.md` is an audit that stopped on backlog C1–C7. No 6B code exists. Its result placeholders (`__R1__`, `__R2__`, `__R3__`, `__R9__`, `__R9S__`) were never filled in |
-| 4 | Workflow state machine | PASS (Phase 6 scope) | `crates/engineering::state`, 25 unit tests per PHASE6 §8. The 6B state delta (`coordinating`, `developing`, `quality_assessment`) is not implemented |
-| 5 | Agent role contracts | PASS (domain) | `roles.rs`, `artifacts.rs`. The 6B v2 fields (`patch_digest`, `tool_call_id`, …) are not implemented |
-| 6 | Real A2A communication for roles | **FAIL** | Only P0 Worker/Reviewer use A2A. The six engineering roles run in-process (`eng/sim.rs`, `eng/providers/anthropic.rs`). There is no `apps/role-agents` and no `eng/a2a_role.rs` |
-| 7 | MCP tool permissions | **FAIL: no MCP** | `rmcp` is not in `Cargo.lock`. `grep -ri mcp backend/apps backend/crates frontend/src` returns no matches |
-| 8 | Isolated code execution | **FAIL: none** | There is no `crates/workspace`, sandbox runner or ADR-004. `RoleInput.patch` and `base_commit_sha` are still placeholders |
-| 9 | Artifact persistence and correlation | PASS (simulation) | PHASE6 E2E-1/2, N4, N11 |
-| 10 | Human approval boundaries | PASS (logic) / BLOCKED (prod) | PHASE6 N1, N2, N10, N14. `api serve` wires `Disabled` → 503 `auth_unavailable` (correct behaviour) |
-| 11 | Regression suite | **UNVERIFIED** | `cargo fmt --check` PASS. I did **not** run tests: another `cargo test --workspace` (PID 62834, not started here, running 39 min in this repo) was using the shared Postgres, and a concurrent run is what corrupted the last regression (PHASE6 §8a). `phase3.rs` still needs a solo re-run |
+| 1 | Git status / structure | PASS | New: `apps/mcp-server`, `apps/role-agents`, `crates/workspace`, `fixtures/sample-crate`, 2 migrations. Existing modules changed additively only |
+| 2 | PRD / ADRs | PASS | `A2A_PRD.md` §9; ADR-003; **ADR-004 (new)**: MCP server and execution boundary |
+| 3 | Phase 6B evidence | **PARTIAL** | Backlog C1–C7 PASS (§2). 6B M2–M10 not done (§3) |
+| 4 | State machine | PASS (Phase 6 states) | `engineering` 30 unit tests. The 6B state delta (`coordinating`, `developing`, `quality_assessment`) is not implemented |
+| 5 | Role contracts | PASS (v1) | Artifact contracts unchanged; the new A2A `RoleTask`/`RoleResult` envelope is in `contracts::role` |
+| 6 | Real A2A for roles | **PARTIAL** | Code Reviewer runs as a real A2A agent (`phase6b.rs` C5: task id recorded, Agent Card trust check). PM, Coordinator, Developer, QA and QL are still in-process simulation |
+| 7 | MCP tool permissions | PASS | `mcp.rs` 9 tests over real HTTP with the rmcp client; `engineering::mcp` 5 unit tests; mutation check red/green |
+| 8 | Isolated code execution | **PARTIAL** | `testing.run` sandbox live test PASS (real `cargo test` in Docker, `--network none`, read-only, non-root, limits, 94 s). **No write path** (`workspace.apply_patch` not built), so no agent can produce a patch. Running LLM-written code stays BLOCKED by ADR-004 (a container is not an accepted boundary for it) |
+| 9 | Persistence and correlation | PASS | `eng_tool_calls` row ↔ `eng_agent_runs.id` ↔ `artifact_recorded.detail.tool_calls` (`phase6b.rs` C5); append-only and least-privilege (C6 test) |
+| 10 | Human approval boundaries | PASS (logic) / BLOCKED (prod) | Phase 6 N1/N2/N10/N14 still pass; `serve` keeps `Disabled` (no IdP) |
+| 11 | Regression | PASS | Full workspace on the isolated DB: exit 0, incl. `phase3.rs` 17/17 (previously unverified), `phase6` 21, `phase6_provider` 9, `workflow` 25. `fmt` and `clippy -D warnings` clean. Portal `astro check` 0 errors, unit 31/31 (Playwright not run) |
 
-**Can the platform run the deterministic engineering workflow without violating authorization policy?** Yes, in-process with simulated agents (Phase 6 Mode A). It cannot run it over A2A, through MCP, or against a real workspace, and those are exactly the parts Phase 6C builds on.
+**Can the platform run the deterministic workflow without violating policy?** Yes: end to end to the delivery gate, with the reviewer over A2A → MCP and its evidence verified against the audit. **Not yet** with a real patch produced in a workspace, or with QA running the sandboxed tests as a role agent.
 
-## 2. Existing provider integration assessment
+## 2. Corrective backlog C1–C7 (result)
 
-| Asset | State |
-|---|---|
-| `RoleAgent` trait (`eng/agents.rs`) + `AgentIdentity{provider, model}` | Good seam for a provider-neutral contract. Provider ≠ role already holds |
-| `eng/providers/anthropic.rs` (Messages API, PM/Coordinator/Reviewer/QL only) | Mode B PASS (9 contract tests). Mode C never run (no API key). It refuses Developer/QA, which is correct |
-| Simulation | Test-only, never wired by `serve` |
-| Provider registry / allowlist | Missing |
-| Usage / cost recording | Tokens recorded per run. No cost, no budget in money |
-| Coding-agent runtime (Claude Agent SDK, Codex, Gemini CLI) | Missing. Each needs the workspace/sandbox from C4/C8 below |
+| ID | Done when | Result | Evidence |
+|---|---|---|---|
+| C0 | Clean solo regression | PASS | §1 row 11 |
+| C1 | MCP server (official `rmcp =3.11.0`), Streamable HTTP, `tools/list` with schemas | PASS | `c1_tools_list_has_three_tools_with_closed_schemas` |
+| C2 | `repository.read_file`, `repository.diff`, `testing.run` on a fixture | PASS | `c2_reviewer_reads_and_diffs_the_exact_candidate`; `workspace` 9 tests (traversal, symlinks, size, binary, base not an ancestor, repo-local git config cannot execute) |
+| C3 | Capability tokens; refusal **before** execution; refusals audited | PASS | `c3_requests_without_a_valid_token_…` (missing / forged / expired / wrong key → 401, audited); `c3_role_and_token_limits_…` |
+| C4 | ADR-004 + boundary test | PASS for fixtures | `live_sandbox_runs_checks_without_network` (live, Docker); `docker_args_enforce_the_boundary`; image must be digest-pinned. Network denial is asserted from the argv, not probed from inside the container |
+| C5 | A2A agent → MCP → artifact, validated against the audit | PASS | `c5_reviewer_reviews_the_exact_candidate_over_a2a_and_mcp`; negatives: fabricated id, no diff, refused call, foreign run, other commit → `tool_evidence_invalid`; MCP refusal → honest `agent_failed`. Mutation check red/green |
+| C6 | Append-only `eng_tool_calls` | PASS | `c6_tool_call_audit_is_append_only_and_least_privilege` (UPDATE/DELETE/TRUNCATE refused as owner; `a2a_mcp` INSERT only, `a2a_app` SELECT only) |
+| C7 | Re-audit | Done | This file |
 
-## 3. Provider compatibility and capability matrix
-
-Docs-based columns come from PHASE6.md §7 (first-party docs checked 2026-11-17, not re-checked today). "Local" is what I observed on this machine.
-
-| Provider | Integration method | Local CLI | Credentials found (no secrets shown) | Coding / tools | Structured output | Cancel / timeout | Usage | Test status |
-|---|---|---|---|---|---|---|---|---|
-| Claude Code | Claude Agent SDK (TS/Python) sidecar; `canUseTool` + hooks | `claude` 2.1.326 | **claude.ai Pro login. No `ANTHROPIC_API_KEY`** | Built-in Read/Edit/Bash, `allowedTools` | final message / schema | interrupt, sessions | per-result | Not started; blocked by sandbox (C4) and credential decision (D1) |
-| Anthropic Messages API | Existing Rust adapter | n/a | **None** | none (non-executing roles) | JSON schema | deadline drop | tokens | Mode B PASS, Mode C BLOCKED |
-| OpenAI Codex | Codex SDK / `codex exec --json` sidecar | `codex` 0.167.0-alpha.3.2 | **ChatGPT login. No `OPENAI_API_KEY`/`CODEX_API_KEY`** | `--sandbox workspace-write` | `--json` events | process kill / resume | in events (unverified) | Not started; same blockers |
-| Gemini | Gemini CLI headless `-p --output-format json` | `gemini` 0.65.0 | OAuth token file only; no `GEMINI_API_KEY`; no `settings.json` auth type | built-in tools, `-s` sandbox | json / stream-json | process kill | `stats.models.*.tokens` | Not started |
-| Grok | xAI API (Rust `reqwest`), client-side function calling | n/a | **None** (`XAI_API_KEY` unset) | via our MCP tools only | `json_schema` strict | deadline drop | in response | Not started; BLOCKED by credentials |
-
-Not verified (still open from Phase 6): whether a consumer subscription login (claude.ai Pro, ChatGPT) may drive an application's automated workflow under each vendor's terms. **Phase 6C must not assume it may** (decision D1).
-
-## 4. HLD and LLD (target, after the backlog)
-
-```
-Human ─► Astro ─► API (Axum): orchestrator, state machine, approvals, provider registry, audit (Postgres)
-                    │ A2A JSON-RPC (official SDK)                │ per-run HMAC capability token
-                    ▼                                            ▼
-     role-agents process: six A2A agents          MCP server (rmcp, pinned): the only process that
-     /agents/{role}; each binds a provider ──MCP──► touches workspaces; re-applies roles::authorize
-     adapter from the registry                      │
-        │ supervised child (stdio, bounded)         ▼
-        ▼                                         sandbox: disposable workspace, no network,
-     provider sidecar (Agent SDK / codex /          non-root, CPU/mem/time limits
-     gemini), inside the sandbox
-```
-
-LLD additions for 6C: `crates/engineering::providers` (pure: `ProviderId` allowlist, `Capabilities`, role compatibility check, budget arithmetic, error classes), `eng/providers/registry.rs` (config → validated catalog; no user-supplied endpoints), `eng/providers/process.rs` (supervised sidecar: env scrubbed to one provider's secret, stdin/stdout NDJSON with size caps, deadline → SIGTERM → SIGKILL on the process group), one adapter per provider, `eng_provider_executions` audit table.
-
-## 5. Provider adapter contract (proposed; extends `RoleAgent`, does not replace it)
-
-```rust
-trait ProviderAdapter: Send + Sync {
-    fn capabilities(&self) -> &Capabilities;                 // static, validated at registry load
-    async fn execute(&self, req: ExecutionRequest) -> Result<ExecutionResult, ProviderError>;
-    async fn cancel(&self, exec: &ProviderExecutionId) -> Result<(), ProviderError>; // Unsupported allowed
-}
-// ExecutionRequest: workflow_id, run_id, role, provider, model, instructions, input artifact refs,
-//   workspace_id (opaque; resolved only by MCP), capability token, deadline, budget, correlation_id
-// ExecutionResult: status, provider+model identity, output artifact (untrusted until validated),
-//   tool_call_ids (cross-checked against eng_tool_calls), duration, usage{tokens, cost, cost_kind: reported|estimated},
-//   provider_execution_id
-// ProviderError: Auth | RateLimited{retry_after} | Timeout | Malformed | Unsupported | Unavailable | Budget
-```
-
-Provider SDK types stay inside each adapter. Code-changing executions are never retried automatically.
-
-## 6. Authentication and sandbox design
-
-- Secrets: one env var per provider, loaded only by the API. Each sidecar receives **only its own** secret via a scrubbed environment and runs in the sandbox. Secrets never reach the browser or the logs (redaction tests extend the existing ones).
-- Sidecars get no repository write access of their own. Writes happen only through MCP `workspace.apply_patch` with a token bound to the run's role, workspace and base SHA. The reviewer token has no write tool.
-- Sandbox: ADR-004 (C4) decides the boundary. Containers alone are not enough for LLM-generated code (PRD §9.5), so live Developer runs stay BLOCKED until that boundary exists.
-
-## 7. Corrective backlog (ordered; must pass before any 6C code)
+## 3. Remaining Phase 6B work (corrective backlog for 6C)
 
 | ID | Item | Done when |
 |---|---|---|
-| C0 | Re-run the full regression **alone** on the database (no other `cargo test` process) | `cargo test --workspace` green, incl. `phase3.rs` 17/17 |
-| C1–C7 | Phase 6B backlog exactly as `docs/PHASE6B.md` §7 (MCP server with `rmcp`, three tools on a fixture repo, capability tokens, ADR-004 execution boundary, Reviewer A2A→MCP test, `eng_tool_calls`, re-audit) | PHASE6B §1 checks 1–10 PASS with filled-in evidence |
-| C8 | Phase 6B M2–M10 (role agents over A2A, `workspace.apply_patch`, Developer → Reviewer → QA → QL on a real candidate, negative tests) | PHASE6B §9 gate PASS |
-| D1 | **Owner decision:** which credentials 6C may use (dedicated API keys with spend limits are recommended; confirm whether the subscription logins are allowed) | Written decision in ADR / this file |
-| D2 | **Owner decision:** spend budget for live tests (Layer C, D) | Cap recorded and enforced in config |
+| B1 | **DONE 2026-11-18.** `workspace.apply_patch` (MCP, Developer only): pure pre-check `engineering::mcp::patch_paths` (git-format only; no binary, symlink/submodule/exec modes, renames, quoted paths; header consistency; ≤ 512 KiB; every path through `roles::authorize` + commit capability). Then `git apply --check`, `git apply --index`, a **staged-state re-check** (mode 100644 only, in scope), and a commit on `agent/<wf>/candidate` with a token-bound base. Any failure resets to HEAD. A per-workspace lock covers every tool (closes the read time-of-check race) | `engineering` 2 new unit tests; `workspace` 3 (incl. a symlink and an exec patch that bypass the parser, `build.rs` out of scope, wrong branch/base); `mcp.rs` 3 over real HTTP (commit + audit row, reviewer/QA refused, `.git/hooks` refused, nothing written); concurrency test fails 3/3 without the lock (mutation) |
+| B2 | Workspace creation from an approved base by the MCP side (replaces the `workspace_id = workflow_id` convention with a stored mapping) | Orchestrator never names a path |
+| B3 | Role agents over A2A for Developer and QA (QA calls `testing.run`, and its exit codes come from audit rows), then PM/Coordinator/QL | All six stages A2A; `phase6b` E2E reaches the delivery gate with a real patch and sandbox QA |
+| B4 | Candidate SHA and patch digest taken from MCP rows, never from the agent (orchestrator overwrite/cross-check for Developer) | Test: a lying developer is rejected |
+| B5 | Remove the MCP token from the role agent's stored A2A history | Test: `GetTask` history has no token |
+| B6 | Portal pages for `/api/eng` (read-only; no approval actions while `Disabled`) | Astro check, unit and Playwright |
+| B7 | State-machine delta and contract v2 fields (PHASE6B §5–6) | Unit tests for every transition |
 
-## 8. Phase 6C implementation backlog and test plan (after section 7)
+## 4. Phase 6C blockers outside the code
 
-1. **P6C-01** Registry + capability catalog + role compatibility (Layer A unit tests: mapping, validation, budget, error classes).
-2. **P6C-02** First provider: a coding runtime with scoped editing (Claude Agent SDK or Codex, chosen by D1). Layer B against a fake sidecar (auth fail, timeout, malformed, unsupported tool, cancel, rate limit, usage parsing). Then Layer C live with a small task.
-3. **P6C-03** Second vendor in the Reviewer role (read-only token). Layers B + C.
-4. **P6C-04** Layer D: "add validation to an existing Axum payload" on a fixture crate. Provider A develops, Provider B reviews the exact SHA, the QA runner runs real tests, QL summarizes, and the run stops at the delivery gate.
-5. **P6C-05** Gemini, Grok where D1 allows.
-6. Audit table, Astro provider/execution views (read-only; no approval action while `Disabled`), Layer E security tests (credential isolation, unauthorized MCP tool, fabricated success, reviewer write, self-approval, provider swap, candidate change invalidates review, SSRF via endpoint, orphan child processes after cancel/timeout).
+| ID | Blocker | Needed from the owner |
+|---|---|---|
+| D1 | **No provider credentials.** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`/`CODEX_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` are unset (env and `.env`). Only consumer logins exist (Claude Code: claude.ai Pro; Codex: ChatGPT), and those are not assumed to authorize automated SDK use | Dedicated API keys (recommended, with spend limits) for at least two vendors, or written confirmation that the subscription logins may be used |
+| D2 | Spend cap for live tests (Layers C/D) | A number |
+| D3 | Isolation for LLM-written code (ADR-004): Docker on macOS is accepted only for fixtures | Accept Docker for **dev-only** live tests on fixture repos, or provide a Linux host with gVisor/Firecracker |
 
-## 9. Phase 6C quality gate (current)
+**Owner decisions (2026-11-18):** D1: the owner will add dedicated API keys with spend limits to the git-ignored `.env`; subscription logins are not used. D2: open (needed before the first live run). D3: Docker accepted for dev-only fixture runs (ADR-004 amendment). Next: finish Phase 6B B1–B7 before any 6C code.
+
+## 5. Provider matrix (unchanged since PHASE6 §7; docs not re-checked in this pass)
+
+| Provider | Method | Local CLI | Credentials | Status |
+|---|---|---|---|---|
+| Claude Code | Agent SDK sidecar (TS/Python), `canUseTool` hooks, MCP client to our server | `claude` 2.1.326 | Pro login only | Not started (D1, D3, B1) |
+| Anthropic Messages API | Existing Rust adapter (non-executing roles) | n/a | none | Mode B PASS, live BLOCKED (D1) |
+| OpenAI Codex | `codex exec --json` / SDK sidecar, MCP client | `codex` 0.167.0-alpha.3.2 | ChatGPT login only | Not started (D1, D3, B1) |
+| Gemini | CLI headless `--output-format json` | `gemini` 0.65.0 | OAuth token file only | Not started (D1) |
+| Grok | xAI API via Rust `reqwest`; our MCP tools via function calling | n/a | none | Not started (D1) |
+
+## 6. Phase 6C quality gate (current)
 
 | Criterion | Status |
 |---|---|
-| Phase 6B remains functional | **FAIL** (never built) |
-| Provider-neutral contracts implemented | FAIL (designed only, §5) |
-| Provider capabilities validated | UNVERIFIED (docs + local CLI presence only) |
-| ≥2 independent providers pass live tests | **BLOCKED** (no API credentials; D1; foundation) |
-| Cross-provider handoffs over real A2A | BLOCKED (roles not on A2A) |
-| Authorized MCP tool calls work | BLOCKED (no MCP) |
-| Code changes in a restricted workspace | BLOCKED (no workspace / sandbox) |
-| Reviewer inspects the exact candidate | BLOCKED |
-| QA genuine test evidence | BLOCKED |
-| Artifacts persisted and correlated | PASS (simulation, Phase 6) |
-| Provider/model identity recorded | PASS (per run, Phase 6) |
-| Provider timeouts/errors handled | PASS (Anthropic adapter, Mode B) |
-| Cost/execution budgets enforced | PARTIAL (run budgets yes; money no) |
-| Secret and tool boundaries tested | PARTIAL (post-hoc tool check only) |
-| Astro shows real provider execution | FAIL (not built) |
-| No agent can bypass human delivery approval | PASS (Phase 6 N1/N2) |
-| Mandatory tests pass | UNVERIFIED (C0) |
+| Phase 6B remains functional | PASS for what exists (§1 row 11); 6B itself incomplete (§3) |
+| Provider-neutral contracts | PARTIAL: `RoleAgent` + `RoleTask`/`RoleResult` + tool evidence; no registry |
+| Provider capabilities validated | UNVERIFIED |
+| ≥ 2 independent live providers | **BLOCKED** (D1) |
+| Cross-provider handoffs over real A2A | PARTIAL (reviewer only, deterministic) |
+| Authorized MCP tool calls work | PASS |
+| Code changes in a restricted workspace | BLOCKED (B1, D3) |
+| Reviewer inspects the exact candidate | PASS (MCP diff, verified against the audit) |
+| QA genuine test evidence | PARTIAL: sandbox runs real tests (C4), but no QA agent uses it yet (B3) |
+| Artifacts persisted and correlated | PASS |
+| Provider/model identity recorded | PASS (per run and artifact) |
+| Timeouts and errors handled | PASS (existing + MCP refusal path) |
+| Cost/execution budgets | PARTIAL (run budgets; no money caps) |
+| Secret and tool boundaries tested | PASS for tools; secrets: no provider secrets exist yet |
+| Astro shows real provider execution | FAIL (B6) |
+| No agent bypasses human delivery approval | PASS |
+| Mandatory tests pass | PASS (Playwright not run) |
 
-**Phase 6C: NOT STARTED, blocked on section 7. Phase 6D readiness: FAIL.** No provider was invoked, nothing was spent, nothing was committed.
+**Phase 6C: NOT STARTED, blocked on §3 (code) and §4 (owner decisions). Phase 6D readiness: FAIL.**

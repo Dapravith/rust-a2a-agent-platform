@@ -74,6 +74,7 @@ async fn run() -> Result<(), String> {
         workspaces_root: root,
         audit: Arc::new(PgAudit::new(pool)),
         runner,
+        locks: Default::default(),
     });
     let listener = tokio::net::TcpListener::bind(bind)
         .await

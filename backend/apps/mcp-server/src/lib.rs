@@ -48,6 +48,24 @@ pub struct McpState {
     /// `None` means `testing.run` fails with `sandbox_unavailable`. It never
     /// falls back to running on the host.
     pub runner: Option<Arc<dyn CheckRunner>>,
+    /// One lock per workspace, held for the whole call: reads, diffs, test runs
+    /// and patches on one workspace never interleave (no check-then-use races).
+    pub locks: WorkspaceLocks,
+}
+
+#[derive(Default)]
+pub struct WorkspaceLocks(
+    std::sync::Mutex<std::collections::HashMap<uuid::Uuid, Arc<tokio::sync::Mutex<()>>>>,
+);
+
+impl WorkspaceLocks {
+    fn get(&self, id: uuid::Uuid) -> Arc<tokio::sync::Mutex<()>> {
+        let mut m = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        m.entry(id).or_default().clone()
+    }
 }
 
 fn now() -> i64 {
@@ -157,6 +175,27 @@ pub fn tool_definitions() -> Vec<Tool> {
             })),
         )
         .with_annotations(ToolAnnotations::new().read_only(true).idempotent(true).open_world(false)),
+        Tool::new(
+            McpTool::ApplyPatch.name(),
+            "Developer only: apply a git-format text patch (regular files inside the granted scope) \
+             and commit it on the workflow's candidate branch. Not idempotent: do not retry automatically.",
+            schema(json!({
+                "type": "object",
+                "properties": {
+                    "patch": {"type": "string", "maxLength": engineering::mcp::MAX_PATCH_BYTES},
+                    "message": {"type": "string", "minLength": 1, "maxLength": 200}
+                },
+                "required": ["patch", "message"],
+                "additionalProperties": false
+            })),
+        )
+        .with_annotations(
+            ToolAnnotations::new()
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(false),
+        ),
     ]
 }
 
@@ -172,6 +211,8 @@ impl McpServer {
         claims: &CapabilityClaims,
         call: &AuthorizedCall,
     ) -> Result<Executed, (&'static str, String)> {
+        let lock = self.state.locks.get(claims.workspace_id);
+        let _guard = lock.lock().await;
         let ws = Workspace::open(&self.state.workspaces_root, claims.workspace_id)
             .map_err(|e| (e.code(), e.to_string()))?;
         match call {
@@ -210,6 +251,23 @@ impl McpServer {
                     head_sha: Some(o.head_sha.clone()),
                     exit_code: o.exit_code,
                     value: serde_json::to_value(o).unwrap_or(Value::Null),
+                })
+            }
+            AuthorizedCall::ApplyPatch {
+                patch,
+                message,
+                paths: _,
+            } => {
+                // Branch from the token's workflow; base from the token. Never from arguments.
+                let branch = engineering::roles::candidate_branch(claims.workflow_id);
+                let r = ws
+                    .apply_patch(&claims.base_sha, &branch, patch, message, &claims.scope)
+                    .await
+                    .map_err(|e| (e.code(), e.to_string()))?;
+                Ok(Executed {
+                    head_sha: Some(r.head_sha.clone()),
+                    exit_code: None,
+                    value: serde_json::to_value(r).unwrap_or(Value::Null),
                 })
             }
         }
@@ -257,6 +315,7 @@ impl ServerHandler for McpServer {
                 rec.target = match &call {
                     AuthorizedCall::ReadFile { path } => Some(path.clone()),
                     AuthorizedCall::RunTests { check_id } => Some(check_id.clone()),
+                    AuthorizedCall::ApplyPatch { paths, .. } => Some(paths.join(",")),
                     AuthorizedCall::Diff => None,
                 };
                 match self.execute(&claims, &call).await {

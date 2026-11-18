@@ -2,7 +2,56 @@
 
 Date: 2026-11-18 · Branch `phase6/native-rust-protocols` @ `49c8773` (clean tree) · Rust 1.100.0 · Postgres 17 (local docker, `127.0.0.1:54329`)
 
-**Verdict: Phase 6A FAILS its mandatory MCP checks (4–8). Following the Phase 6B instruction ("if mandatory Phase 6A checks fail, stop implementation and report a corrective backlog"), no Phase 6B code was written.** This document is the audit, the compatibility assessment, the design for 6B, and the backlog that has to land first.
+> **Superseded by §0 (re-audit at `c8bff57`).** Sections 1–9 below are the original audit at `49c8773` and are kept as the record.
+
+## 0. Re-audit at `c8bff57` (2026-11-18 10:37–10:50)
+
+Commit `c8bff57` ("add mock output indication draft in worker", 51 files, +4530) adds backlog items C1–C6: `apps/mcp-server` (`rmcp =3.11.0`), `apps/role-agents` (Code Reviewer over A2A), `crates/workspace`, `engineering::mcp`, `eng/a2a_role.rs`, migrations `20261118000001/2`, `tests/phase6b.rs`, ADR-004. Clean tree; every peer session idle when the audit started.
+
+**Verdict: Phase 6A now PASSES checks 1–8 and 10. Check 9 passes for every pre-existing test; the full suite has 1 deterministic failure, a new workspace unit test whose fixture is defective (C8 below).** Phase 6B may start once C8 is fixed (**C8 fixed, see below**). No code was changed by this audit.
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 1 | Workspace compiles | PASS | `cargo fmt --check` exit 0; `cargo clippy --workspace --all-targets --locked -D warnings` exit 0 |
+| 2 | Worker and Reviewer over official A2A | PASS | `worker-agent/tests/a2a.rs` 5/5, `reviewer-agent/tests/a2a.rs` 5/5 |
+| 3 | Agent Cards discoverable and valid | PASS | Card tests above; the Code Reviewer role agent publishes its own card (`role-agents`), resolved through the trusted-card `A2AGateway` in `phase6b` |
+| 4 | MCP server starts independently | PASS | **Real binary** `target/debug/mcp-server` started on its own (loopback, token key, workspaces root, scratch DB); `initialize` answers `rmcp 3.11.0`. Probe: scratchpad `mcp6a_probe.py` (stdlib, raw Streamable HTTP) |
+| 5 | MCP tool discovery and invocation | PASS | `tools/list` = `repository.diff`, `repository.read_file`, `testing.run`; `read_file` returns content bound to HEAD; `diff` = exact base..HEAD; `testing.run` ran in the **real Docker sandbox** (`runner=docker`, honest `exit_code=101` on a fixture without `Cargo.toml`); ignored live test `live_sandbox_runs_checks_without_network` PASS with `rust@sha256:2752b33…` (cargo test exit 0, HEAD = candidate); `mcp-server/tests/mcp.rs` 9/9 |
+| 6 | A2A agent invokes an MCP tool | PASS | `phase6b` 6/6: orchestrator → Code Reviewer over A2A on real TCP → `repository.diff` over MCP on real TCP → audit in real Postgres |
+| 7 | A2A artifacts carry validated tool results | PASS (gap noted) | `verify_tool_evidence`: every cited `tool_call_id` must exist in `eng_tool_calls`, match run and role, be `allowed`, and (reviewer/QA) match the candidate HEAD; a review must cite `repository.diff`, QA must cite `testing.run`. Fabricated / foreign / refused / stale evidence is rejected (`phase6b` c5 tests). **Gap:** the artifact's *content* is not compared with the audited result (e.g. QA exit codes vs `exit_code`, `patch_sha256`); needed before a real QA agent (6B M6) |
+| 8 | Tool authorization server-side | PASS | Probe: 12 refusals before execution — not granted, traversal, absolute, `.git`, out of scope, unknown tool `shell.exec`, extra argument, arbitrary check id; 401 for no token, forged signature, over-granted token, TTL > 15 min |
+| 9 | Existing tests pass | PASS (existing) / 1 new FAIL | `cargo test --workspace --locked --no-fail-fast -- --test-threads=2`: **175 passed, 1 failed, 1 ignored**. All 6 failures from the first audit now pass (phase3 17/17 in 100 s vs 717 s; phase6 21/21; host load ~115 vs ~157). Failing: `workspace::tests::diff_refuses_wrong_or_abbreviated_base`, 3/3 on re-run (see C8) |
+| 10 | Git status and user changes preserved | PASS | No tracked file changed except this document; the scratch database `audit6a_scratch` was created and dropped |
+
+Additional evidence:
+
+- **Audit completeness.** The probe made 15 tool calls; `eng_tool_calls` holds exactly 15 rows (3 allowed, 12 refused, including 4 transport-level refusals with no verified token), and `UPDATE` as superuser is refused (`eng_tool_calls is append-only`). The probe's own row-count assertion was wrong (it expected 18) and reported a FAIL; the data are correct.
+- **Sandbox boundary, probed with the runner's exact flags.** uid 65534; read-only root; `CapEff 0`; only `lo` plus down tunnel devices; outbound TCP fails with `Network is unreachable`; DNS fails. ADR-004 scope stands: accepted for deterministic fixtures only, not for LLM-generated code.
+
+### C8 (RESOLVED 2026-11-18 11:20, uncommitted): fixture yields identical commits
+
+**Fix** (`crates/workspace/src/tests.rs` only; `fixture.rs` untouched): the non-ancestor case no longer uses a second fixture. It creates an unrelated root commit *inside the same repository* with `git commit-tree` (HEAD unchanged, asserted), checks it differs from base and candidate, and asserts the specific `Err(WorkspaceError::BaseNotAncestor)` rather than any error. **Verification:** on a clean export of `c8bff57`, 9/9 pass, 5/5 repeats, `rustfmt --check` and `clippy -D warnings` clean; **mutation** (ancestor check removed from `Workspace::diff`) turns the test red at the new assertion. In the live checkout (with another session's uncommitted 6B changes), `workspace` 9/9 and `engineering` 32/32 after a clean rebuild.
+
+*Verification incident:* the export was first built with the live `target/` dir; cargo reused the export's (mutated) artifacts for the live tree, which produced 4 false failures. Resolved with `cargo clean -p workspace -p engineering` and a rebuild from live sources. Lesson: never share `CARGO_TARGET_DIR` between two source trees.
+
+Original diagnosis:
+
+`fixture::create` makes the same tree, author, message and (1-second) timestamp, so two fixtures created within one second have **identical SHAs**. `diff_refuses_wrong_or_abbreviated_base` builds a second fixture and expects its candidate SHA to be a non-ancestor; it is in fact the same commit, so `diff` correctly succeeds and the assertion fails. Proof by elimination: a SHA absent from the repo makes `git merge-base --is-ancestor` exit 128 → `is_ancestor` returns `Err` → `diff` returns `Err`; `Ok` is only possible if the commit exists in this repo. Product behaviour is correct; the test does not exercise the non-ancestor path. Fix: make the second repo differ (e.g. a distinct commit message or file), then re-run.
+
+### Remaining risks found in review (not blocking 6A)
+
+| Severity | Item | Where |
+|---|---|---|
+| Medium | Tool evidence checks existence/run/role/commit, not that artifact content matches the audited result | `eng/orchestrator.rs` `verify_tool_evidence` |
+| Low | Symlink check and read are not atomic (TOCTOU); only the MCP server touches workspaces today | `workspace::Workspace::resolve` / `read_file` |
+| Low | Capability token travels in the A2A message body over plain HTTP; acceptable only on loopback/private network | `eng/a2a_role.rs`, `RoleTask.mcp_token` |
+| Info | Only the Code Reviewer is an A2A role agent; the other five roles are still in-process simulation. `workspace.apply_patch` does not exist yet (6B M5) | `apps/role-agents` |
+| Info | `MCP_DATABASE_URL` should use a login role in `a2a_mcp`; the probe used the local superuser on a scratch DB | ops |
+| Info | Commit message of `c8bff57` does not describe its content | history |
+
+---
+
+**Original verdict (at `49c8773`): Phase 6A FAILS its mandatory MCP checks (4–8). Following the Phase 6B instruction ("if mandatory Phase 6A checks fail, stop implementation and report a corrective backlog"), no Phase 6B code was written.** This document is the audit, the compatibility assessment, the design for 6B, and the backlog that has to land first.
 
 ## 1. Phase 6A technical audit
 

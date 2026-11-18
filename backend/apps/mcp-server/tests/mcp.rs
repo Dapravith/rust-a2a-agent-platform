@@ -71,6 +71,7 @@ async fn start_with(audit: Arc<MemoryAudit>, runner: Option<Arc<dyn CheckRunner>
         workspaces_root: root.path().canonicalize().unwrap(),
         audit: audit.clone(),
         runner,
+        locks: Default::default(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -144,7 +145,7 @@ fn err_code(r: &CallToolResult) -> &str {
 }
 
 #[tokio::test]
-async fn c1_tools_list_has_three_tools_with_closed_schemas() {
+async fn c1_tools_list_has_four_tools_with_closed_schemas() {
     let env = start().await;
     let c = env
         .client(&env.token(Role::CodeReviewer, &[McpTool::Diff]))
@@ -154,7 +155,12 @@ async fn c1_tools_list_has_three_tools_with_closed_schemas() {
     names.sort();
     assert_eq!(
         names,
-        ["repository.diff", "repository.read_file", "testing.run"]
+        [
+            "repository.diff",
+            "repository.read_file",
+            "testing.run",
+            "workspace.apply_patch"
+        ]
     );
     for t in &tools {
         assert_eq!(
@@ -163,9 +169,12 @@ async fn c1_tools_list_has_three_tools_with_closed_schemas() {
             "{}",
             t.name
         );
+        // Only the write tool is not read-only.
         assert_eq!(
             t.annotations.as_ref().and_then(|a| a.read_only_hint),
-            Some(true)
+            Some(t.name != "workspace.apply_patch"),
+            "{}",
+            t.name
         );
     }
     let run = tools.iter().find(|t| t.name == "testing.run").unwrap();
@@ -275,13 +284,7 @@ async fn c3_role_and_token_limits_are_enforced_before_execution() {
         err_code(&call(&rev, "testing.run", json!({"check_id": "cargo_test"})).await),
         "tool_not_granted"
     );
-    for t in [
-        "workspace.apply_patch",
-        "shell.exec",
-        "git.push",
-        "approve_delivery",
-        "secrets.read",
-    ] {
+    for t in ["shell.exec", "git.push", "approve_delivery", "secrets.read"] {
         assert_eq!(
             err_code(&call(&rev, t, json!({})).await),
             "unknown_tool",
@@ -412,4 +415,160 @@ async fn results_are_withheld_when_the_audit_cannot_be_written() {
         .call_tool(CallToolRequestParams::new("repository.diff").with_arguments(Default::default()))
         .await;
     assert!(r.is_err(), "an unaudited result was returned: {r:?}");
+}
+
+// ---------------------------------------------------------------------------
+// workspace.apply_patch (Phase 6B B1)
+// ---------------------------------------------------------------------------
+
+/// A server whose workspace holds only the base commit (Developer starting point).
+async fn start_base() -> (Env, String) {
+    let env = start().await;
+    let root = env._root.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let (_ws, base) = fixture::create_base(&root, id).await.unwrap();
+    // Point the env's fixture at the new base-only workspace.
+    let mut env = env;
+    env.fx = fixture::Fixture {
+        workspace: Workspace::open(&root, id).unwrap(),
+        base_sha: base.clone(),
+        candidate_sha: String::new(),
+    };
+    (env, base)
+}
+
+#[tokio::test]
+async fn b1_developer_patch_is_applied_committed_and_audited() {
+    let (env, base) = start_base().await;
+    let claims = env.claims(Role::Developer, &McpTool::allowed_for(Role::Developer));
+    let dev = env.client(&issue_token(KEY, &claims).unwrap()).await;
+    let patch = fixture::candidate_patch().await.unwrap();
+    let r = call(
+        &dev,
+        "workspace.apply_patch",
+        json!({"patch": patch, "message": "Validate currency"}),
+    )
+    .await;
+    assert_eq!(r.is_error, Some(false), "{r:?}");
+    let b = body(&r);
+    assert_eq!(b["previous_head_sha"], json!(base));
+    assert_eq!(
+        b["branch"],
+        json!(engineering::roles::candidate_branch(env.workflow_id))
+    );
+    assert_eq!(b["changed_files"], json!(["src/lib.rs"]));
+    let head = b["head_sha"].as_str().unwrap().to_owned();
+    assert_ne!(head, base);
+    // The same token's diff now shows exactly that candidate.
+    let d = call(&dev, "repository.diff", json!({})).await;
+    assert_eq!(body(&d)["head_sha"], json!(head));
+    assert_eq!(body(&d)["patch_sha256"], b["patch_sha256"]);
+    let row = env
+        .audit
+        .rows()
+        .into_iter()
+        .find(|r| r.tool == "workspace.apply_patch")
+        .unwrap();
+    assert_eq!(row.outcome, Outcome::Allowed);
+    assert_eq!(row.run_id, Some(claims.run_id));
+    assert_eq!(row.head_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(row.target.as_deref(), Some("src/lib.rs"));
+}
+
+#[tokio::test]
+async fn b1_writes_are_refused_for_other_roles_and_out_of_scope_paths() {
+    let (env, base) = start_base().await;
+    let patch = fixture::candidate_patch().await.unwrap();
+    for role in [Role::CodeReviewer, Role::QaTester] {
+        let c = env
+            .client(&env.token(role, &McpTool::allowed_for(role)))
+            .await;
+        assert_eq!(
+            err_code(
+                &call(
+                    &c,
+                    "workspace.apply_patch",
+                    json!({"patch": patch, "message": "x"})
+                )
+                .await
+            ),
+            "tool_not_granted",
+            "{role:?}"
+        );
+    }
+    let dev = env
+        .client(&env.token(Role::Developer, &McpTool::allowed_for(Role::Developer)))
+        .await;
+    let outside = "diff --git a/build.rs b/build.rs\nnew file mode 100644\n--- /dev/null\n+++ b/build.rs\n@@ -0,0 +1 @@\n+fn main() {}\n";
+    assert_eq!(
+        err_code(
+            &call(
+                &dev,
+                "workspace.apply_patch",
+                json!({"patch": outside, "message": "x"})
+            )
+            .await
+        ),
+        "path_out_of_scope"
+    );
+    let hook = outside.replace("build.rs", ".git/hooks/pre-commit");
+    assert!(
+        call(
+            &dev,
+            "workspace.apply_patch",
+            json!({"patch": hook, "message": "x"})
+        )
+        .await
+        .is_error
+            == Some(true)
+    );
+    // Nothing was written: HEAD is still the base and the tree is clean.
+    assert_eq!(env.fx.workspace.head_sha().await.unwrap(), base);
+    assert!(!env.fx.workspace.dir().join("build.rs").exists());
+    let rows = env.audit.rows();
+    assert!(
+        rows.iter().all(|r| r.outcome == Outcome::Refused),
+        "{rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn b1_concurrent_patches_are_serialized_per_workspace() {
+    let (env, _base) = start_base().await;
+    let tok = env.token(Role::Developer, &McpTool::allowed_for(Role::Developer));
+    let (a, b) = (env.client(&tok).await, env.client(&tok).await);
+    let p = |n: &str| {
+        format!(
+            "diff --git a/src/{n}.rs b/src/{n}.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/{n}.rs\n@@ -0,0 +1 @@\n+// {n}\n"
+        )
+    };
+    let (ra, rb) = tokio::join!(
+        call(
+            &a,
+            "workspace.apply_patch",
+            json!({"patch": p("a"), "message": "a"})
+        ),
+        call(
+            &b,
+            "workspace.apply_patch",
+            json!({"patch": p("b"), "message": "b"})
+        ),
+    );
+    assert_eq!(
+        (ra.is_error, rb.is_error),
+        (Some(false), Some(false)),
+        "{ra:?} {rb:?}"
+    );
+    // Both landed, one after the other (a linear history, no lost update).
+    let heads = [
+        body(&ra)["previous_head_sha"].clone(),
+        body(&rb)["previous_head_sha"].clone(),
+    ];
+    let news = [body(&ra)["head_sha"].clone(), body(&rb)["head_sha"].clone()];
+    assert!(
+        heads.contains(&news[0]) || heads.contains(&news[1]),
+        "not serialized: {heads:?} {news:?}"
+    );
+    let d = call(&a, "repository.diff", json!({})).await;
+    assert_eq!(body(&d)["changed_files"], json!(["src/a.rs", "src/b.rs"]));
 }

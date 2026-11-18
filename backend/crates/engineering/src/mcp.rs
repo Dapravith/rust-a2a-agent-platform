@@ -25,16 +25,24 @@ pub enum McpTool {
     Diff,
     #[serde(rename = "testing.run")]
     RunTests,
+    #[serde(rename = "workspace.apply_patch")]
+    ApplyPatch,
 }
 
 impl McpTool {
-    pub const ALL: [McpTool; 3] = [McpTool::ReadFile, McpTool::Diff, McpTool::RunTests];
+    pub const ALL: [McpTool; 4] = [
+        McpTool::ReadFile,
+        McpTool::Diff,
+        McpTool::RunTests,
+        McpTool::ApplyPatch,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             McpTool::ReadFile => "repository.read_file",
             McpTool::Diff => "repository.diff",
             McpTool::RunTests => "testing.run",
+            McpTool::ApplyPatch => "workspace.apply_patch",
         }
     }
 
@@ -47,6 +55,7 @@ impl McpTool {
         match self {
             McpTool::ReadFile | McpTool::Diff => Tool::ReadWorkspace,
             McpTool::RunTests => Tool::RunCheck,
+            McpTool::ApplyPatch => Tool::WriteWorkspace,
         }
     }
 
@@ -161,9 +170,20 @@ pub fn verify_token(key: &[u8], token: &str, now: i64) -> Result<CapabilityClaim
 /// A validated, authorized tool call, ready for execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizedCall {
-    ReadFile { path: String },
+    ReadFile {
+        path: String,
+    },
     Diff,
-    RunTests { check_id: String },
+    RunTests {
+        check_id: String,
+    },
+    /// A git-format patch whose every path is inside the scope, committed on
+    /// the workflow's candidate branch.
+    ApplyPatch {
+        patch: String,
+        message: String,
+        paths: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -207,6 +227,75 @@ struct DiffArgs {}
 #[serde(deny_unknown_fields)]
 struct RunArgs {
     check_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyArgs {
+    patch: String,
+    message: String,
+}
+
+/// Largest patch `workspace.apply_patch` accepts.
+pub const MAX_PATCH_BYTES: usize = 512 * 1024;
+
+/// Paths a git-format patch touches. Refuses anything that is not a plain
+/// text change of regular files: binary patches, symlink or submodule modes,
+/// mode changes, renames/copies, quoted (escaped) paths, and non-git diffs.
+/// The workspace re-checks the staged result after applying (defence in depth).
+pub fn patch_paths(patch: &str) -> Result<Vec<String>, CallError> {
+    let bad = |m: &str| CallError::InvalidArguments(format!("patch refused: {m}"));
+    if patch.len() > MAX_PATCH_BYTES {
+        return Err(bad("too large"));
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for line in patch.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            if rest.contains('"') {
+                return Err(bad("quoted paths"));
+            }
+            let (a, b) = rest
+                .split_once(" b/")
+                .ok_or_else(|| bad("malformed diff header"))?;
+            let a = a
+                .strip_prefix("a/")
+                .ok_or_else(|| bad("malformed diff header"))?;
+            if a != b || b.contains(' ') {
+                return Err(bad("renames, copies or paths with spaces"));
+            }
+            paths.push(b.to_owned());
+        } else if line.starts_with("GIT binary patch") || line.starts_with("Binary files ") {
+            return Err(bad("binary content"));
+        } else if line.starts_with("rename ")
+            || line.starts_with("copy ")
+            || line.starts_with("similarity index")
+        {
+            return Err(bad("renames or copies"));
+        } else if line.starts_with("old mode ") || line.starts_with("new mode ") {
+            return Err(bad("mode changes"));
+        } else if let Some(m) = line
+            .strip_prefix("new file mode ")
+            .or_else(|| line.strip_prefix("deleted file mode "))
+        {
+            if m.trim() != "100644" {
+                return Err(bad("only regular, non-executable files"));
+            }
+        } else if let Some(p) = line
+            .strip_prefix("--- a/")
+            .or_else(|| line.strip_prefix("+++ b/"))
+        {
+            // Must agree with the header (git apply trusts these lines).
+            if paths.last().map(String::as_str) != Some(p.trim_end()) {
+                return Err(bad("file header disagrees with diff header"));
+            }
+        }
+    }
+    if paths.is_empty() {
+        return Err(bad("not a git-format patch (no `diff --git` header)"));
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 fn args<T: for<'de> Deserialize<'de>>(v: &serde_json::Value) -> Result<T, CallError> {
@@ -272,6 +361,40 @@ pub fn authorize_call(
                 check_id: a.check_id,
             })
         }
+        McpTool::ApplyPatch => {
+            let a: ApplyArgs = args(arguments)?;
+            let msg = a.message.trim();
+            if msg.is_empty() || msg.chars().count() > 200 || msg.chars().any(char::is_control) {
+                return Err(CallError::InvalidArguments(
+                    "message must be 1..=200 printable characters on one line".into(),
+                ));
+            }
+            let paths = patch_paths(&a.patch)?;
+            // Same rule as everywhere else: every written path goes through the role policy.
+            for p in &paths {
+                roles::authorize(
+                    claims.role,
+                    &ToolRequest {
+                        tool: cap_name.clone(),
+                        target: Some(p.clone()),
+                    },
+                    &claims.scope,
+                )?;
+            }
+            roles::authorize(
+                claims.role,
+                &ToolRequest {
+                    tool: "commit_to_candidate_branch".into(),
+                    target: None,
+                },
+                &claims.scope,
+            )?;
+            Ok(AuthorizedCall::ApplyPatch {
+                patch: a.patch,
+                message: msg.to_owned(),
+                paths,
+            })
+        }
     }
 }
 
@@ -304,7 +427,7 @@ mod tests {
         use McpTool::*;
         assert_eq!(
             McpTool::allowed_for(Role::Developer),
-            vec![ReadFile, Diff, RunTests]
+            vec![ReadFile, Diff, RunTests, ApplyPatch]
         );
         assert_eq!(
             McpTool::allowed_for(Role::CodeReviewer),
@@ -395,12 +518,18 @@ mod tests {
                 .code(),
             "tool_not_granted"
         );
-        for t in [
-            "workspace.apply_patch",
-            "shell",
-            "git.push",
-            "approve_delivery",
-        ] {
+        // Reviewer: never a write, even with a well-formed patch.
+        assert_eq!(
+            authorize_call(
+                &rev,
+                "workspace.apply_patch",
+                &json!({"patch": PATCH, "message": "x"})
+            )
+            .unwrap_err()
+            .code(),
+            "tool_not_granted"
+        );
+        for t in ["shell", "git.push", "approve_delivery"] {
             assert_eq!(
                 authorize_call(&rev, t, &json!({})).unwrap_err().code(),
                 "unknown_tool"
@@ -464,5 +593,100 @@ mod tests {
             .code(),
             "invalid_arguments"
         );
+    }
+
+    const PATCH: &str = "diff --git a/src/lib.rs b/src/lib.rs\nindex 1..2 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n";
+
+    #[test]
+    fn developer_patch_is_authorized_per_path() {
+        let dev = claims(Role::Developer, McpTool::allowed_for(Role::Developer));
+        assert_eq!(
+            authorize_call(
+                &dev,
+                "workspace.apply_patch",
+                &json!({"patch": PATCH, "message": "fix"})
+            ),
+            Ok(AuthorizedCall::ApplyPatch {
+                patch: PATCH.into(),
+                message: "fix".into(),
+                paths: vec!["src/lib.rs".into()],
+            })
+        );
+        let outside = PATCH.replace("src/lib.rs", "Cargo.toml");
+        assert_eq!(
+            authorize_call(
+                &dev,
+                "workspace.apply_patch",
+                &json!({"patch": outside, "message": "x"})
+            )
+            .unwrap_err()
+            .code(),
+            "path_out_of_scope"
+        );
+        let git_dir = PATCH.replace("src/lib.rs", ".git/hooks/pre-commit");
+        assert!(
+            authorize_call(
+                &dev,
+                "workspace.apply_patch",
+                &json!({"patch": git_dir, "message": "x"})
+            )
+            .is_err()
+        );
+        for m in ["", "a\nb", &"x".repeat(201)] {
+            assert_eq!(
+                authorize_call(
+                    &dev,
+                    "workspace.apply_patch",
+                    &json!({"patch": PATCH, "message": m})
+                )
+                .unwrap_err()
+                .code(),
+                "invalid_arguments"
+            );
+        }
+        // A QA token can never carry the write tool.
+        assert!(issue_token(KEY, &claims(Role::QaTester, vec![McpTool::ApplyPatch])).is_err());
+    }
+
+    #[test]
+    fn patch_parser_refuses_everything_but_plain_text_edits() {
+        assert_eq!(patch_paths(PATCH).unwrap(), vec!["src/lib.rs".to_owned()]);
+        let new_file = "diff --git a/src/n.rs b/src/n.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/n.rs\n@@ -0,0 +1 @@\n+x\n";
+        assert_eq!(patch_paths(new_file).unwrap(), vec!["src/n.rs".to_owned()]);
+        for (bad, why) in [
+            (
+                "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+                "plain diff",
+            ),
+            (
+                "diff --git a/src/l b/src/l\nnew file mode 120000\n",
+                "symlink",
+            ),
+            (
+                "diff --git a/src/m b/src/m\nnew file mode 160000\n",
+                "submodule",
+            ),
+            (
+                "diff --git a/src/x b/src/x\nnew file mode 100755\n",
+                "executable",
+            ),
+            (
+                "diff --git a/src/x b/src/x\nold mode 100644\nnew mode 100755\n",
+                "chmod",
+            ),
+            (
+                "diff --git a/src/a b/src/b\nrename from src/a\nrename to src/b\n",
+                "rename",
+            ),
+            ("diff --git a/src/x b/src/x\nGIT binary patch\n", "binary"),
+            ("diff --git \"a/src/x\" \"b/src/x\"\n", "quoted"),
+            (
+                "diff --git a/src/x b/src/x\n--- a/src/x\n+++ b/Cargo.toml\n",
+                "header mismatch",
+            ),
+        ] {
+            assert!(patch_paths(bad).is_err(), "{why}");
+        }
+        assert!(patch_paths(&"x".repeat(MAX_PATCH_BYTES + 1)).is_err());
     }
 }
