@@ -28,22 +28,31 @@ flowchart LR
 ├── frontend/                  Astro 7 + TypeScript portal (SSR, @astrojs/node); tests/unit, tests/e2e
 ├── backend/                   Rust Cargo workspace (Cargo.toml, Cargo.lock)
 │   ├── apps/
-│   │   ├── api/               Axum REST API, A2A client gateway, deterministic orchestration, SQLx
+│   │   ├── api/               Axum REST API, A2A gateway, P0 orchestration, Phase 6 engineering
+│   │   │                      workflows (`src/eng/`: orchestrator, approvals, store), SQLx
 │   │   ├── worker-agent/      Worker A2A server (skill `draft-answer`)
-│   │   └── reviewer-agent/    Reviewer A2A server (skill `review-draft`)
+│   │   ├── reviewer-agent/    Reviewer A2A server (skill `review-draft`)
+│   │   ├── role-agents/       The six Phase 6 engineering role agents (A2A, one listener)
+│   │   └── mcp-server/        MCP tool server: capability tokens, workspaces, tool-call audit
 │   ├── crates/
 │   │   ├── contracts/         Shared A2A payload DTOs + validation
-│   │   └── agent-runtime/     Shared agent plumbing: SDK server wiring + the one LLM client
+│   │   ├── agent-runtime/     Shared agent plumbing: SDK server wiring + the one LLM client
+│   │   ├── engineering/       Pure Phase 6 rules: state machine, roles, artifacts, gates, MCP policy
+│   │   └── workspace/         Git work trees, patch application, sandboxed check runner
+│   ├── fixtures/sample-crate/ Target crate for engineering-workflow tests
 │   └── migrations/            SQLx migrations (embedded into `api`, applied by `api migrate`)
-├── infrastructure/local/      compose.yaml for the local Postgres only (no deployment manifests in P0)
-├── docs/                      ADR, architecture, P1 plan
+├── infrastructure/local/      compose.yaml for the local Postgres only (no deployment manifests yet)
+├── docs/                      ADR, architecture, per-phase reports (PHASE2 … PHASE6F)
 ├── scripts/                   dev.sh (run all services), e2e-stack.sh (isolated stack for browser tests),
 │                              check-secrets.sh (credential exposure check)
-└── .github/workflows/ci.yml   fmt, clippy, tests with Postgres, Astro build, secret check
+└── .github/workflows/ci.yml   fmt, clippy, tests with Postgres, npm audit (allowlisted), Astro build,
+                               secret check
 ```
 
-Dependency direction: `api → contracts`; each agent → `agent-runtime → contracts`.
-The API never depends on agent code at runtime; agents never call each other.
+Dependency direction: `api → engineering, agent-runtime, contracts`; each agent →
+`agent-runtime → contracts` (`role-agents` also → `engineering`); `mcp-server → engineering,
+workspace`. The API never depends on agent code at runtime (agent crates are dev-dependencies for
+tests only); agents never call each other.
 
 ## Local setup
 
@@ -104,7 +113,7 @@ cd backend && DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54329/a2a carg
 ```
 
 ```bash
-(cd frontend && npm test && npm run build) && ./scripts/check-secrets.sh
+(cd frontend && npm run audit && npm test && npm run build) && ./scripts/check-secrets.sh
 ```
 
 Browser tests against the real stack (needs the local Postgres container and a Rust toolchain;

@@ -37,6 +37,17 @@ pub enum GateKind {
     Workflow,
 }
 
+impl GateKind {
+    /// Value stored in `eng_approvals.gate` (same as the JSON spelling).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GateKind::Plan => "plan",
+            GateKind::Delivery => "delivery",
+            GateKind::Workflow => "workflow",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
@@ -44,6 +55,18 @@ pub enum Decision {
     RequestChanges,
     Reject,
     Cancel,
+}
+
+impl Decision {
+    /// Value stored in `eng_approvals.decision` (same as the JSON spelling).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Decision::Approve => "approve",
+            Decision::RequestChanges => "request_changes",
+            Decision::Reject => "reject",
+            Decision::Cancel => "cancel",
+        }
+    }
 }
 
 /// Request body. There is intentionally no approver field.
@@ -240,13 +263,8 @@ pub async fn decide(
     )
     .bind(approval_id)
     .bind(workflow_id)
-    .bind(match req.gate { GateKind::Plan => "plan", GateKind::Delivery => "delivery", GateKind::Workflow => "workflow" })
-    .bind(match req.decision {
-        Decision::Approve => "approve",
-        Decision::RequestChanges => "request_changes",
-        Decision::Reject => "reject",
-        Decision::Cancel => "cancel",
-    })
+    .bind(req.gate.as_str())
+    .bind(req.decision.as_str())
     .bind(&who.subject)
     .bind(approver_role.as_str())
     .bind(&who.issuer)
@@ -298,5 +316,26 @@ pub fn awaiting(status: Status) -> Option<GateKind> {
         Status::AwaitingPlanApproval => Some(GateKind::Plan),
         Status::AwaitingDeliveryApproval => Some(GateKind::Delivery),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn stored_spelling_matches_json() {
+        for g in [GateKind::Plan, GateKind::Delivery, GateKind::Workflow] {
+            assert_eq!(serde_json::to_value(g).unwrap(), g.as_str());
+        }
+        for d in [
+            Decision::Approve,
+            Decision::RequestChanges,
+            Decision::Reject,
+            Decision::Cancel,
+        ] {
+            assert_eq!(serde_json::to_value(d).unwrap(), d.as_str());
+        }
     }
 }

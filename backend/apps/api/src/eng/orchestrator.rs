@@ -27,7 +27,8 @@ use super::agents::{
     AgentErrorKind, AgentIdentity, AgentOutput, RoleAgent, RoleInput, readable_kinds,
 };
 use super::store::{
-    self, Changes, EngArtifact, EngErrorCode, EngWorkflow, NewArtifact, RunStart, StoreError,
+    self, Changes, EngArtifact, EngErrorCode, EngWorkflow, NewArtifact, NewAuditEvent, RunStart,
+    StoreError,
 };
 
 pub struct Orchestrator {
@@ -543,15 +544,17 @@ impl Orchestrator {
         .await?;
         store::audit(
             &mut tx,
-            wf.id,
-            "agent",
-            &ident.agent_id,
-            "artifact_recorded",
-            None,
-            None,
-            locked.version,
-            json!({"run_id": run_id, "artifact_id": artifact_id, "kind": v.kind.as_str(), "content_hash": hash,
+            NewAuditEvent {
+                workflow_id: wf.id,
+                actor_kind: "agent",
+                actor_id: &ident.agent_id,
+                action: "artifact_recorded",
+                from: None,
+                to: None,
+                version: locked.version,
+                detail: json!({"run_id": run_id, "artifact_id": artifact_id, "kind": v.kind.as_str(), "content_hash": hash,
                    "commit_sha": v.commit_sha, "tools": out.tool_requests, "tool_calls": out.tool_calls}),
+            },
         )
         .await?;
         if let Some(event) = v.event {

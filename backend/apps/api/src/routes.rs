@@ -19,7 +19,16 @@ use crate::db::{self, AgentRun, DbError, Workflow};
 use crate::engine::Engine;
 
 const MAX_BODY_BYTES: usize = 16 * 1024;
-const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+pub(crate) const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+
+/// `Idempotency-Key` format shared by every write endpoint: 1-128 chars of `[A-Za-z0-9_-]`.
+pub(crate) fn is_valid_idempotency_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -147,12 +156,7 @@ async fn create_workflow(
             let s = v
                 .to_str()
                 .map_err(|_| ApiError::Validation("invalid Idempotency-Key".into()))?;
-            if s.is_empty()
-                || s.len() > 128
-                || !s
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
+            if !is_valid_idempotency_key(s) {
                 return Err(ApiError::Validation(
                     "Idempotency-Key must be 1-128 chars of [A-Za-z0-9_-]".into(),
                 ));

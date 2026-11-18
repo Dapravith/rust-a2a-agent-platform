@@ -147,6 +147,7 @@ dependencies = [
  "a2a-lf",
  "a2a-server-lf",
  "agent-runtime",
+ "api",
  "axum",
  "chrono",
  "contracts",

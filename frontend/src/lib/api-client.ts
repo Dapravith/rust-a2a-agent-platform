@@ -2,9 +2,13 @@
 // pages and endpoints during server rendering; the browser never calls Rust.
 // It adds a timeout, refuses redirects, bounds the body size, decodes the
 // `{"error": {code, message}}` envelope and validates every 2xx body.
-import type { z } from "astro/zod";
+import { z } from "astro/zod";
 import { ApiError } from "./errors.ts";
-import { errorEnvelopeSchema } from "../features/workflows/schemas.ts";
+
+/** `{"error": {code, message}}`: the error body of every Rust API endpoint. */
+const errorEnvelopeSchema = z.object({
+  error: z.object({ code: z.string(), message: z.string() }),
+});
 
 export interface ApiClientOptions {
   /** Base origin of the Rust API, e.g. `http://127.0.0.1:8080`. */

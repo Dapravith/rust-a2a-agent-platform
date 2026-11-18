@@ -7,13 +7,14 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use engineering::state::{Budget, HumanRole};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use super::approval::{self, DecisionRequest};
@@ -235,14 +236,9 @@ async fn decide(
     let who = principal(&s, &headers)?;
     let id = Uuid::parse_str(&id).map_err(|_| EngApiError::Store(StoreError::NotFound))?;
     let key = headers
-        .get("idempotency-key")
+        .get(crate::routes::IDEMPOTENCY_HEADER)
         .and_then(|v| v.to_str().ok())
-        .filter(|k| {
-            !k.is_empty()
-                && k.len() <= 128
-                && k.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        })
+        .filter(|k| crate::routes::is_valid_idempotency_key(k))
         .ok_or_else(|| {
             EngApiError::Validation(
                 "Idempotency-Key header (1-128 chars of [A-Za-z0-9_-]) is required".into(),
@@ -272,5 +268,10 @@ pub fn router(state: EngState) -> Router {
         .route("/workflows", get(list).post(create))
         .route("/workflows/{id}", get(detail))
         .route("/workflows/{id}/decisions", post(decide))
+        // Responses carry requirements, approvals and the audit trail.
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .with_state(state)
 }
