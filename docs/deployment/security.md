@@ -24,7 +24,6 @@
 | 5 | LLM-written code execution | **Disabled** in the pilot (no role-agents/mcp-server, `ENG_PROVIDER` unset). Requires a microVM boundary before enabling (ADR-004) |
 | 6 | Rust dependencies inside images are invisible to trivy | covered by `cargo deny`; follow-up: `cargo auditable` builds |
 | 7 | `chrono` unmaintained (RUSTSEC-2026-0543, not a vulnerability) | ignored with review date 2027-02-28 |
-| 8 | picomatch ReDoS allowlisted in `npm run audit` (Phase 6F S2) | expires 2026-12-31 |
 
 ## Reviewed scanner findings (not suppressed, below the failure threshold)
 

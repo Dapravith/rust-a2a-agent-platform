@@ -136,7 +136,7 @@ Suites covered: A2A interop (`worker-agent`, `reviewer-agent`, `phase6b` over re
 | TD2 | Code quality | Low | `eng/orchestrator.rs` (`stage` 97, `validate` 117, `verify_tool_evidence` 112, `commit` 103 lines), `eng/approval.rs::decide` 180 lines | Split only alongside the 6D changes that touch them, so each split is reviewed with its test coverage; not worth a separate pass on security-critical code | Medium |
 | TD3 | Code quality | Low | `orchestrator.rs` (`Orchestrator::commit`), `engine.rs` (`Engine::run_step`) | Two remaining `too_many_arguments` allows (private fns, distinct types) | Low |
 | TD4 | Dependency | Medium | Rust workspace, CI | No `cargo audit`/`cargo deny` in CI; add with a reviewed `deny.toml` | Low |
-| TD5 | Dependency | Low | `frontend/scripts/audit-allowlist.json` | picomatch allowlist expires 2026-12-31; re-check for a patched release then | Low |
+| TD5 | Dependency | Low | `frontend/scripts/audit-allowlist.json` | **Closed 2026-11-19:** npm audit no longer reports GHSA-fc5q-39xc-vjpf; the entry was removed (the script fails on stale entries) and the allowlist is empty | Low |
 | TD6 | Testing | Medium | `frontend/tests/e2e` | Playwright/axe not in CI and not run this phase | — |
 | TD7 | Architecture | Low | `apps/api/src/eng` | Module name `eng` is an abbreviation; renaming to `engineering` collides with the crate name. Leave until a natural boundary (e.g. if `eng` becomes its own crate) | Medium |
 | TD8 | Scope | — | `PHASE6C.md`, `PHASE6DE.md` | 6C (≥ 2 live providers) and 6D (OIDC, GitHub App, merge) remain not started; 5 of 6 roles still simulated in tests | — |

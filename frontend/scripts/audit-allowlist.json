@@ -1,8 +1,1 @@
-{
-  "GHSA-fc5q-39xc-vjpf": {
-    "package": "picomatch",
-    "reason": "No patched release exists (<=4.0.7; 4.0.7 is latest). ReDoS requires an attacker-controlled glob pattern; astro/vite/unstorage only compile patterns from our own config, never from request input. Remove once picomatch ships a fix and the lockfile is updated.",
-    "added": "2026-11-18",
-    "expires": "2026-12-31"
-  }
-}
+{}
