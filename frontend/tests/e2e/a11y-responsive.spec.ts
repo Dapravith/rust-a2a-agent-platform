@@ -78,7 +78,7 @@ test("keyboard: skip link, navigation and form are reachable in order", async ({
   await expect(page.locator("#main")).toBeFocused();
   await page.goto("/");
   const order: string[] = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 7; i++) {
     await page.keyboard.press("Tab");
     order.push(await page.evaluate(() => {
       const el = document.activeElement as HTMLElement;
@@ -86,7 +86,7 @@ test("keyboard: skip link, navigation and form are reachable in order", async ({
     }));
   }
   // A workflow is running in this suite, so its "View progress" link precedes the form.
-  expect(order).toEqual(["Skip to content", "A2A Review", "Dashboard", "Workflows", "View progress", "question"]);
+  expect(order).toEqual(["Skip to content", "A2A Review", "Dashboard", "Workflows", "Engineering", "View progress", "question"]);
   await page.keyboard.type("Keyboard-only submission of a question");
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Run workflow" })).toBeFocused();

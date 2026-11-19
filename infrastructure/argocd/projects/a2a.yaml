@@ -1,0 +1,37 @@
+# Everything the platform's Applications may do. Not cluster-admin: the only
+# cluster-scoped kind is Namespace; namespaced kinds are an allow-list (no
+# Role/RoleBinding, no Secret: Secrets come from SealedSecrets).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: a2a
+  namespace: argocd
+spec:
+  description: Rust + Astro A2A platform (private pilot)
+  sourceRepos:
+    - https://github.com/Dapravith/rust-a2a-agent-platform.git
+  destinations:
+    - { server: https://kubernetes.default.svc, namespace: a2a-dev }
+    - { server: https://kubernetes.default.svc, namespace: a2a-staging }
+    - { server: https://kubernetes.default.svc, namespace: a2a-production }
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+  namespaceResourceWhitelist:
+    - { group: "", kind: ConfigMap }
+    - { group: "", kind: Service }
+    - { group: "", kind: ServiceAccount }
+    - { group: "", kind: ResourceQuota }
+    - { group: apps, kind: Deployment }
+    - { group: batch, kind: Job }
+    - { group: networking.k8s.io, kind: NetworkPolicy }
+    - { group: networking.k8s.io, kind: Ingress }
+    - { group: bitnami.com, kind: SealedSecret }
+  orphanedResources:
+    warn: true
+  syncWindows:
+    # Production never syncs automatically; a human-triggered sync is allowed.
+    - kind: deny
+      schedule: "* * * * *"
+      duration: 24h
+      applications: [a2a-production]
+      manualSync: true

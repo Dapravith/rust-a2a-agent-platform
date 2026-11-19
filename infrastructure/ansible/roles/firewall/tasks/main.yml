@@ -1,0 +1,43 @@
+# A bad ruleset must not lock the operator out: the previous ruleset is
+# restored automatically after 120 s unless this play reconnects and cancels it.
+- name: Snapshot of the current ruleset (rollback source)
+  ansible.builtin.shell: nft list ruleset > /etc/nftables.rollback.conf
+  changed_when: false
+
+- name: Ruleset (syntax-checked before it is written)
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0600"
+    validate: nft -c -f %s
+  register: firewall_ruleset
+
+- name: Apply with automatic rollback
+  when: firewall_ruleset.changed  # noqa: no-handler -- apply, reconnect and cancel-rollback must run in sequence, inline
+  block:
+    - name: Arm rollback timer
+      ansible.builtin.command: >-
+        systemd-run --unit=a2a-nft-rollback --on-active=120
+        /bin/sh -c 'nft flush ruleset && nft -f /etc/nftables.rollback.conf'
+      changed_when: true
+
+    - name: Load new ruleset
+      ansible.builtin.command: nft -f /etc/nftables.conf
+      changed_when: true
+
+    - name: Fresh SSH connection under the new rules
+      ansible.builtin.meta: reset_connection
+
+    - name: Management access still works
+      ansible.builtin.wait_for_connection:
+        timeout: 60
+
+    - name: Cancel rollback (access confirmed)
+      ansible.builtin.systemd_service:
+        name: a2a-nft-rollback.timer
+        state: stopped
+
+- name: Ruleset persists across reboots
+  ansible.builtin.service:
+    name: nftables
+    enabled: true

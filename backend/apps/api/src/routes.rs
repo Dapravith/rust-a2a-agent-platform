@@ -222,6 +222,7 @@ async fn api_not_found() -> ApiError {
 }
 
 pub fn router(engine: Engine) -> Router {
+    let metrics_route = get(metrics).with_state(engine.clone());
     let api = Router::new()
         .route("/health", get(health))
         .route("/agents", get(agents))
@@ -236,14 +237,32 @@ pub fn router(engine: Engine) -> Router {
     // `/api/v1` is the versioned path; `/api` stays for the dashboard. Both
     // mount the same handlers. `/healthz` is process liveness only (no DB),
     // while `/api/health` is readiness and reports the database.
+    // `/metrics` is for the in-cluster Prometheus only: the API has no
+    // ingress route and its NetworkPolicy admits just the portal and the
+    // monitoring namespace.
     Router::new()
         .route("/healthz", get(liveness))
+        .route("/metrics", metrics_route)
         .nest("/api/v1", api.clone())
         .nest("/api", api)
 }
 
 async fn liveness() -> Json<Value> {
     Json(json!({"status": "ok"}))
+}
+
+async fn metrics(State(engine): State<Engine>) -> Response {
+    let up = tokio::time::timeout(Duration::from_secs(2), db::ping(&engine.pool))
+        .await
+        .is_ok_and(|r| r.is_ok());
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        crate::metrics::render(up),
+    )
+        .into_response()
 }
 
 /// Security headers, limits, timeouts and request tracing. Applied last, so

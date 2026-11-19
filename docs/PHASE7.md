@@ -2,7 +2,7 @@
 
 Date: 2026-11-18 · Branch `phase6-d-revised-structure` @ `3ec8e1a` (working tree = the commit Phase 6F verified; only `docs/PHASE6F.md` and this file are untracked)
 
-**Status: design for review. No infrastructure, image, workflow or application file has been changed. Implementation (7B onward) waits on the owner decisions in §11.**
+**Status: 7A–7F implemented and verified locally (§12, §13). Live deployment waits on the owner decisions in §11 and the authorizations in §13.**
 
 Measured values are marked MEASURED; everything else is an ESTIMATE or UNVERIFIED.
 
@@ -209,3 +209,152 @@ GitOps lives in this repo for the pilot (simplest; protected paths via CODEOWNER
 | D5 | Secrets mechanism | Sealed Secrets (no external secret manager required; Argo-compatible). Lost controller key = every SealedSecret must be re-created from source values |
 | D6 | GitOps location | Same repo with CODEOWNERS on protected paths for the pilot |
 | D7 | Supabase plan / projects for dev (backup and PITR capability depends on plan) | Separate dev project; confirm backup features in the dashboard |
+
+---
+
+## 12. Phase 7B results (2026-11-19)
+
+Status: **7B complete locally; GitHub-side runs and publishing UNVERIFIED** (nothing pushed; publishing needs owner opt-in).
+
+### Changes
+
+| Item | Files |
+|---|---|
+| A1 SIGTERM drain (all Rust binaries) | `crates/agent-runtime/src/server.rs` (`shutdown_signal`), `apps/api/src/main.rs`, `apps/role-agents/src/main.rs`, `apps/mcp-server/src/main.rs`; test `apps/worker-agent/tests/shutdown.rs` |
+| A1b SIGTERM drain (portal; found by the smoke test: Node as PID 1 ignored SIGTERM, 21 s to SIGKILL) | `frontend/server.mjs` |
+| A2 `LOG_FORMAT=json` for agents | `agent-runtime::init_tracing`, `.env.example` |
+| A4 portal liveness | `frontend/src/pages/healthz.ts` |
+| B1 images | `backend/Dockerfile`, `frontend/Dockerfile`, `.dockerignore` ×2, `scripts/container-smoke.sh` |
+| B2 CI | `.github/workflows/ci.yml` (SHA-pinned; + `supply-chain`, `e2e`, `images`), `backend/deny.toml`, `.gitleaksignore`, `scripts/ci-install-scanners.sh` |
+| B3 release | `.github/workflows/release.yml` (inert until `PUBLISH_IMAGES=true`) |
+| Test fix | `frontend/tests/e2e/a11y-responsive.spec.ts`: expectation predated the Phase 6 "Engineering" nav link (suite had never run) |
+| Docs | `docs/deployment/local-containers.md`, `docs/deployment/ci-cd.md` |
+
+No REST/A2A/MCP contract, migration or approval change.
+
+### Evidence (MEASURED, this Mac, arm64 unless stated)
+
+| Check | Result |
+|---|---|
+| Baseline (HEAD worktree): fmt, clippy, `cargo test` | PASS, 197 passed / 0 failed / 2 ignored (= 6F) |
+| SIGTERM test on **unfixed** code | FAIL as expected (`signal: 15`) |
+| After: fmt, clippy `-D warnings`, `cargo test --workspace` | PASS, **198 passed / 0 failed / 2 ignored** |
+| Frontend unit / `astro check` / `check-secrets.sh` | 35/35 · 0 errors, warnings, hints · OK |
+| **Playwright E2E + axe** (first run since Phase 4) | **31/31 passed** |
+| `cargo deny --locked check` | PASS (1 documented ignore: RUSTSEC-2026-0543, chrono unmaintained) |
+| gitleaks (git history) | PASS (S4 false positive in `.gitleaksignore`) |
+| `trivy config` (Dockerfiles, workflows) | 0 HIGH/CRITICAL |
+| actionlint | PASS |
+| Image builds | api 82 MB, worker 71 MB, reviewer 71 MB, portal 471 MB (uncompressed); all uid 65532, no shell |
+| `trivy image` (vuln + secret) | 0 HIGH/CRITICAL, 0 secrets; api: 63 LOW/MEDIUM/UNKNOWN Debian findings. Rust crates inside binaries not visible to Trivy (covered by cargo-deny) |
+| `scripts/container-smoke.sh` (read-only, cap-drop ALL, no-new-privileges, non-root) | **PASS**: probes, both Agent Cards, mock Worker → Reviewer workflow, portal render + CSP/XFO, every container exits 0 on SIGTERM in ≤ 1 s |
+| Memory after one workflow (mock) | portal 47 MiB, api 3.6 MiB, worker 2.6 MiB, reviewer 1.7 MiB; CPU idle |
+| linux/amd64 | portal: built, runs hardened, `process.arch` = `x64`. Rust images: **UNVERIFIED** locally (emulated release build would take hours; CI `images` job builds amd64 natively) |
+
+### Gate 7B
+
+| Item | Status |
+|---|---|
+| Required images build | PASS (arm64 ×4, amd64 portal); amd64 Rust UNVERIFIED until CI runs |
+| Tests pass | PASS |
+| Security scans run | PASS locally; UNVERIFIED in GitHub Actions |
+| Images published by digest | NOT RUN: needs owner authorization (`PUBLISH_IMAGES=true`) |
+| CI permissions restricted | PASS by configuration (`contents: read` default; write scopes only in `release.yml` `publish`); UNVERIFIED on GitHub |
+
+### Follow-ups
+
+- Lower planned Kubernetes requests (§4) toward the measured values with headroom for real-LLM payloads.
+- Portal image size: production `node_modules` dominates; consider pruning in 7C.
+- `cargo auditable` builds so image scanners see Rust dependencies.
+- 6F TD6 (E2E not in CI) is closed by the `e2e` job once it runs on GitHub.
+
+---
+
+## 13. Phases 7C–7F results (2026-11-19)
+
+**Verdict: deployment-ready configuration, verified locally on real K3s and Argo CD. Not a live deployment:** no VPS exists, no image has been published, and nothing has run in GitHub Actions.
+
+### What was added
+
+| Area | Files |
+|---|---|
+| Kubernetes | `infrastructure/kubernetes/base/` (api, agents, portal, network policies, quota), `overlays/{dev,staging,production}` (digest-only), `overlays/local` (test bed only), `components/real-inference` |
+| Host | `infrastructure/ansible/` (base, ssh, firewall, k3s roles; PSA and audit policy files) |
+| GitOps | `infrastructure/argocd/install/` (Argo CD v3.6.2 at its commit, Sealed Secrets v0.41.2 vendored, all digests pinned), `projects/a2a.yaml`, `applications/`, `.github/CODEOWNERS`, `release.yml` `gitops-pr` job |
+| Observability | `/metrics` in the API (`backend/apps/api/src/metrics.rs` + tests), `infrastructure/observability/alerts.yaml` + `alerts-test.yaml` |
+| Scripts | `validate.sh`, `promote.sh`, `local-cluster.sh`, `cluster-tests.sh`, `argocd-local-test.sh`, `db-restore-test.sh`, `etcd-restore-test.sh` |
+| Docs | `docs/deployment/{architecture,k3s-setup,gitops,secrets,monitoring,backup-restore,rollback,security}.md` |
+
+Terraform is intentionally absent: the provider is undecided (D1), and no provider code is invented.
+
+### Evidence (MEASURED)
+
+| Check | Result |
+|---|---|
+| Rust fmt / clippy / `cargo test --workspace` (with metrics) | PASS, **201 passed** / 0 failed / 2 ignored |
+| `validate.sh` (4 overlays, Argo CD objects, upstream install) | PASS: 25/25/25/34 and 4 resources valid, 0 HIGH/CRITICAL in our manifests; upstream bundle findings reported (5 CRITICAL, 5 HIGH: controller RBAC by design) |
+| ansible syntax-check + ansible-lint | PASS (production profile) |
+| `promtool check rules` / `test rules` / `check metrics` | 12 rules, 7 alert tests PASS (verified they fail on wrong expectations), real `/metrics` output lint-clean |
+| `container-smoke.sh` (new image) | PASS, incl. `/metrics` counting a workflow with no IDs in labels |
+| `cluster-tests.sh` on K3s v1.37.2 | **27/27** (PSA, quota, secrets encryption, 4 allowed + 10 denied network paths, TLS ingress, no API route, in-cluster workflow over verify-full TLS) |
+| `argocd-local-test.sh` | **14/14** (sync, unseal, wave-1 migration, workflow, drift self-heal, commit applied, git revert rollback, Role refused by AppProject, production deny window) |
+| `db-restore-test.sh` | PASS (×3): rows, grants, 11 RLS policies, same workflow served; API refuses a newer schema |
+| `etcd-restore-test.sh` | PASS: snapshot without plaintext secrets, deleted objects restored, Secret decrypts, encryption on |
+| Node usage (K3s + Traefik + Argo CD + Sealed Secrets + 2 app stacks) | 376m CPU, 1.85 GiB RAM; largest pods: Argo CD controller 115 MiB, portal 60 MiB |
+
+### Defects found by running things (all fixed)
+
+1. `ResourceQuota` key `services.loadbalancer` is invalid (`…loadbalancers`). Schema validation accepted it; the API server rejected it.
+2. Argo CD rendered into `default`: upstream `install.yaml` has no namespace. Fixed with a namespaced sub-kustomization; `validate.sh` now fails on it.
+3. `PreSync` migration hook deadlocks a first sync (it runs before its namespace and secrets exist). Now a wave-1 `Sync` hook, with the API in wave 2.
+4. A DB restore needs the cluster roles first (`role "a2a_app" does not exist`), and `--no-acl` would silently drop the runtime role's grants. The procedure and test were fixed.
+5. Test-harness bugs (Docker name matching, attach races, flags) were fixed in the scripts; none affected the product.
+
+### Environment notes
+
+The local K3s runs were starved by three unrelated kind clusters (~700% CPU). With the owner's approval they were paused during the test window and unpaused afterwards, and all three were confirmed Ready. Test-bed-only K3s settings (SQLite datastore or tmpfs etcd, leader election off) are confined to `local-cluster.sh`.
+
+### Quality gates
+
+| Gate | Item | Status |
+|---|---|---|
+| 7A | Phase 6F verified · topology documented · sizing reviewed · boundaries defined · provider limits identified | PASS ×5 |
+| 7B | Images build | PASS (arm64 ×4, amd64 portal); amd64 Rust UNVERIFIED until CI |
+| 7B | Tests pass · security scans run | PASS (locally) |
+| 7B | Images published by digest | BLOCKED: needs owner authorization |
+| 7B | CI permissions restricted | PASS (config); UNVERIFIED on GitHub |
+| 7C | Host configuration validated | UNVERIFIED: lint only, no host |
+| 7C | K3s installation verified | PASS locally; UNVERIFIED on VPS |
+| 7C | Administrative access restricted | UNVERIFIED: firewall/SSH roles not executed |
+| 7C | Network policies validated · secret handling verified | PASS (local K3s) |
+| 7D | Argo CD installed and protected | PASS (local) |
+| 7D | GitOps repository configured | UNVERIFIED: manifests not on GitHub `main` |
+| 7D | Dev reconciliation works · rollback mechanism verified | PASS (local Git server) |
+| 7D | Promotion rules enforced | PASS (script, project, deny window); branch protection UNVERIFIED |
+| 7E | Logs and metrics available | PASS (app level); no monitoring stack (D3) |
+| 7E | Important alerts tested | PASS (rule unit tests); delivery UNVERIFIED |
+| 7E | Backup documented · restore test executed · runbooks | PASS (DB and etcd restores, disposable) |
+| 7F | Integration · A2A · approvals enforced · smoke · recovery · resources · risks documented | PASS (local); MCP not deployed by design |
+| 7F | No unresolved critical security finding | PASS, conditional: unauthenticated portal is High and blocks public exposure |
+
+### Weighted assessment
+
+| Category | Weight | Score | Basis |
+|---|---:|---:|---|
+| Security | 25% | 3.5 | controls verified in a real cluster; unauthenticated portal; cluster-wide controller RBAC; host hardening not executed |
+| Deployment correctness | 20% | 3.5 | full stack deployed by Argo CD locally; three deploy-blocking defects found and fixed; no VPS, no published images |
+| Reliability and recovery | 20% | 3.5 | DB and etcd restores, schema guard, SIGTERM drain, self-heal; single node; key restore and off-node copies untested |
+| CI/CD and GitOps | 15% | 3.5 | hardened, linted, locally exercised; never run on GitHub |
+| Observability | 10% | 2.5 | bounded metrics and tested alerts; no stack, no alert delivery |
+| Maintainability | 10% | 4.0 | small manifests, one doc per topic, every check scripted |
+| **Weighted total** | | **3.45 / 5** | does not override the UNVERIFIED and BLOCKED rows above |
+
+### To go live (owner authorizations, in order)
+
+1. Decide D1–D7 (§11).
+2. Push the branch, merge after CI passes on GitHub. This also proves the amd64 Rust images.
+3. Set `PUBLISH_IMAGES=true` and `PORTAL_HOSTS`; create the GitOps GitHub App. First publish.
+4. Branch protection with Code Owners.
+5. Create the VPS and VPN; run `ansible-playbook --check`, then apply (two runs for the SSH lock-down).
+6. Bootstrap `infrastructure/argocd/install`, back up the Sealed Secrets key, seal the dev secrets, apply `infrastructure/argocd`.
+7. Run `cluster-tests.sh` (adapted to the dev namespace) and a restore drill on the node; then the pilot is live for dev only.

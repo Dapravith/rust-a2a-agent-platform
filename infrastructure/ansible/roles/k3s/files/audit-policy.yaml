@@ -1,0 +1,25 @@
+# Kubernetes API audit log: who changed what. Secret and ConfigMap bodies are
+# never recorded (metadata only); reads of non-sensitive objects are dropped.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages: [RequestReceived]
+rules:
+  - level: None
+    users: ["system:kube-proxy"]
+  - level: None
+    verbs: [get, list, watch]
+    resources:
+      - group: ""
+        resources: [events, endpoints, nodes, pods, services]
+      - group: coordination.k8s.io
+        resources: [leases]
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: [secrets, configmaps, serviceaccounts/token]
+      - group: bitnami.com
+        resources: [sealedsecrets]
+  - level: Metadata
+    verbs: [get, list, watch]
+  - level: RequestResponse
+    verbs: [create, update, patch, delete, deletecollection]

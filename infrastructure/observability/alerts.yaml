@@ -1,0 +1,106 @@
+# Prometheus alerting rules for the pilot. App metrics come from the API's
+# /metrics (backend/apps/api/src/metrics.rs); pod and node metrics from
+# kube-state-metrics and node-exporter. Unit tests: alerts-test.yaml
+#   promtool check rules alerts.yaml && promtool test rules alerts-test.yaml
+# An unfamiliar IP alone is never an alert: auth/approval alerts key on
+# outcomes the API records, correlated with the audit trail.
+groups:
+  - name: a2a-availability
+    rules:
+      - alert: A2AApiDown
+        expr: up{job="a2a-api"} == 0 or absent(up{job="a2a-api"})
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: API not scrapeable for 2 minutes
+          runbook: docs/deployment/monitoring.md#a2aapidown
+      - alert: A2ADatabaseUnreachable
+        expr: a2a_database_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: API cannot query PostgreSQL (readiness is failing)
+          runbook: docs/deployment/monitoring.md#a2adatabaseunreachable
+      - alert: A2APodRestarting
+        expr: increase(kube_pod_container_status_restarts_total{namespace=~"a2a-.*"}[15m]) >= 3
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.pod }} restarted {{ $value }} times in 15 minutes"
+
+  - name: a2a-workflows
+    rules:
+      - alert: A2AWorkflowsFailing
+        expr: increase(a2a_workflows_total{outcome="failed"}[30m]) >= 3
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} workflows failed in 30 minutes (error_code {{ $labels.error_code }})"
+          runbook: docs/deployment/monitoring.md#a2aworkflowsfailing
+      - alert: A2AAgentErrorRateHigh
+        expr: |
+          sum by (agent) (rate(a2a_agent_calls_total{outcome="failed"}[15m]))
+            / sum by (agent) (rate(a2a_agent_calls_total[15m])) > 0.25
+          and sum by (agent) (increase(a2a_agent_calls_total[15m])) >= 4
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 25% of A2A calls to {{ $labels.agent }} failed in 15 minutes"
+      # llm_timeout, llm_rate_limited, llm_provider_error, llm_unavailable, ...
+      - alert: A2AProviderFailures
+        expr: sum by (agent, error_code) (increase(a2a_agent_calls_total{outcome="failed", error_code=~"llm_.*"}[30m])) >= 3
+        labels: { severity: warning }
+        annotations:
+          summary: "LLM provider failures for {{ $labels.agent }}: {{ $labels.error_code }}"
+
+  - name: a2a-security
+    rules:
+      # Approval/engineering writes are disabled (503) until an IdP exists;
+      # any 401/403 on /api/eng means someone is attempting an action they
+      # are not authorized for. Correlate with eng_audit_events before acting.
+      - alert: A2AUnauthorizedApprovalAttempts
+        expr: sum(increase(a2a_http_requests_total{route=~"/api(/v1)?/eng/.*", method="POST", status_class="4xx"}[15m])) >= 5
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} rejected engineering/approval write requests in 15 minutes"
+          runbook: docs/deployment/monitoring.md#a2aunauthorizedapprovalattempts
+      - alert: A2ARequestErrorsHigh
+        expr: |
+          sum(rate(a2a_http_requests_total{status_class="5xx"}[10m]))
+            / sum(rate(a2a_http_requests_total[10m])) > 0.05
+          and sum(increase(a2a_http_requests_total[10m])) >= 20
+        labels: { severity: warning }
+        annotations:
+          summary: More than 5% of API requests returned 5xx in 10 minutes
+
+  - name: a2a-node
+    rules:
+      - alert: NodeMemoryPressure
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.9
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Node memory above 90% for 10 minutes
+      - alert: NodeCpuSaturated
+        expr: 1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.9
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: Node CPU above 90% for 15 minutes
+      - alert: NodeDiskFillingUp
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.15
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: Root filesystem has less than 15% free
+
+  - name: a2a-backups
+    rules:
+      # Written by the backup jobs as a textfile/pushed metric: the Unix time of
+      # the last successful K3s etcd snapshot and off-node copy.
+      - alert: A2ABackupMissing
+        expr: time() - a2a_backup_last_success_timestamp_seconds > 8 * 3600 or absent(a2a_backup_last_success_timestamp_seconds)
+        for: 30m
+        labels: { severity: critical }
+        annotations:
+          summary: No successful backup recorded in the last 8 hours
+          runbook: docs/deployment/backup-restore.md

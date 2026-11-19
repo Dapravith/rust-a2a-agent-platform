@@ -1,0 +1,23 @@
+# Automated: every merged change to overlays/dev is applied; drift is reverted.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: a2a-dev
+  namespace: argocd
+spec:
+  project: a2a
+  source:
+    repoURL: https://github.com/Dapravith/rust-a2a-agent-platform.git
+    targetRevision: main
+    path: infrastructure/kubernetes/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: a2a-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions: [PruneLast=true, ApplyOutOfSyncOnly=true]
+    retry:
+      limit: 3
+      backoff: { duration: 10s, factor: 2, maxDuration: 3m }

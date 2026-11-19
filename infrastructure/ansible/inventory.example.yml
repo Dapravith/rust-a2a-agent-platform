@@ -1,0 +1,8 @@
+# Copy to inventory.yml (git-ignored) and fill in. 203.0.113.10 is a
+# documentation address (RFC 5737), not a real host.
+all:
+  hosts:
+    a2a-pilot:
+      ansible_host: 203.0.113.10
+      ansible_user: a2a-admin          # existing sudo user with your key
+      node_ip: 100.64.0.10             # the node's VPN address (API + ingress bind here)

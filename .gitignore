@@ -11,3 +11,7 @@ frontend/.astro/
 # Playwright output
 frontend/test-results/
 frontend/playwright-report/
+
+# Infrastructure: real inventory and generated local-cluster secrets
+infrastructure/ansible/inventory.yml
+infrastructure/kubernetes/overlays/local/.generated/

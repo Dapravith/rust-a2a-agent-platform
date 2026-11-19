@@ -1,0 +1,10 @@
+# Changes here change what runs, or how it is promoted. With branch protection
+# "Require review from Code Owners" on main, they need the owner's approval.
+/infrastructure/kubernetes/overlays/production/  @Dapravith
+/infrastructure/kubernetes/overlays/staging/     @Dapravith
+/infrastructure/kubernetes/base/                 @Dapravith
+/infrastructure/kubernetes/components/           @Dapravith
+/infrastructure/argocd/                          @Dapravith
+/infrastructure/ansible/                         @Dapravith
+/.github/                                        @Dapravith
+/backend/migrations/                             @Dapravith

@@ -1,0 +1,40 @@
+# Local K3s test bed only (infrastructure/scripts/local-cluster.sh).
+# Locally built images by tag, a TLS test database, and secrets generated into
+# .generated/ (git-ignored). Not an environment: nothing here is promoted.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: a2a-local
+resources:
+  - namespace.yaml
+  - ../../base
+  - testdb.yaml
+images:
+  - { name: ghcr.io/dapravith/a2a-api, newName: docker.io/library/a2a-api, newTag: dev }
+  - { name: ghcr.io/dapravith/a2a-worker-agent, newName: docker.io/library/a2a-worker-agent, newTag: dev }
+  - { name: ghcr.io/dapravith/a2a-reviewer-agent, newName: docker.io/library/a2a-reviewer-agent, newTag: dev }
+  - { name: ghcr.io/dapravith/a2a-portal, newName: docker.io/library/a2a-portal, newTag: dev }
+configMapGenerator:
+  - name: db-ca
+    files: [ca.crt=.generated/ca.crt]
+secretGenerator:
+  - name: api-database
+    files: [url=.generated/database-url]
+  - name: api-database-migration
+    files: [url=.generated/database-url]
+  - name: testdb-auth
+    files: [password=.generated/db-password]
+  - name: testdb-tls
+    type: kubernetes.io/tls
+    files: [tls.crt=.generated/db.crt, tls.key=.generated/db.key]
+  - name: portal-tls
+    type: kubernetes.io/tls
+    files: [tls.crt=.generated/portal.crt, tls.key=.generated/portal.key]
+patches:
+  - target: { kind: Ingress, name: portal }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: portal.local.test
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: portal.local.test

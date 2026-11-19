@@ -1,0 +1,17 @@
+# Manual sync after a reviewed promotion PR (docs/deployment/gitops.md).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: a2a-staging
+  namespace: argocd
+spec:
+  project: a2a
+  source:
+    repoURL: https://github.com/Dapravith/rust-a2a-agent-platform.git
+    targetRevision: main
+    path: infrastructure/kubernetes/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: a2a-staging
+  syncPolicy:
+    syncOptions: [PruneLast=true]

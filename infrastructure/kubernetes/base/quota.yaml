@@ -1,0 +1,16 @@
+# Namespace ceiling: the pilot's four pods plus one migration Job and one
+# rolling-update surge pod, with room to spare. A runaway workload hits this
+# instead of starving the single node.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: a2a-quota
+spec:
+  hard:
+    pods: "12"
+    requests.cpu: "1"
+    requests.memory: 1Gi
+    limits.cpu: "4"
+    limits.memory: 2Gi
+    services.loadbalancers: "0"
+    services.nodeports: "0"

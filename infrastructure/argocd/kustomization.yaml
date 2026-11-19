@@ -1,0 +1,8 @@
+# Platform GitOps objects (after install/): kubectl apply -k infrastructure/argocd
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - projects/a2a.yaml
+  - applications/a2a-dev.yaml
+  - applications/a2a-staging.yaml
+  - applications/a2a-production.yaml

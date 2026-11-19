@@ -920,3 +920,54 @@ async fn static_dashboard_gets_security_headers(pool: PgPool) {
     }
     std::fs::remove_dir_all(dir).ok();
 }
+
+// ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+/// Counters move for a real workflow, routes are recorded as templates and no
+/// identifier becomes a label (bounded cardinality).
+#[sqlx::test(migrator = "api::db::MIGRATOR")]
+async fn metrics_expose_bounded_workflow_and_http_series(pool: PgPool) {
+    let (w, r) = (real_worker().await, real_reviewer().await);
+    let h = harness(pool, &w, &r, SECS_5).await;
+    let wf = h.run().await;
+    assert_eq!(wf["status"], "completed");
+    let id = wf["id"].as_str().unwrap().to_owned();
+
+    let res = h
+        .http
+        .get(format!("{}/metrics", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(
+        res.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain; version=0.0.4")
+    );
+    let body = res.text().await.unwrap();
+
+    assert!(body.contains("a2a_database_up 1"), "{body}");
+    assert!(body.contains("a2a_workflows_total{outcome=\"completed\",error_code=\"\"}"));
+    for agent in ["worker", "reviewer"] {
+        assert!(
+            body.contains(&format!(
+                "a2a_agent_calls_total{{agent=\"{agent}\",outcome=\"completed\",error_code=\"\"}}"
+            )),
+            "{agent} call not counted"
+        );
+        assert!(body.contains(&format!(
+            "a2a_agent_call_duration_seconds_count{{agent=\"{agent}\"}}"
+        )));
+    }
+    assert!(body.contains(
+        "a2a_http_requests_total{route=\"/api/workflows/{id}\",method=\"GET\",status_class=\"2xx\"}"
+    ));
+    assert!(
+        !body.contains(&id),
+        "a workflow id leaked into metric labels"
+    );
+}

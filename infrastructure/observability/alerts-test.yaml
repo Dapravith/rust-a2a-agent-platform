@@ -1,0 +1,98 @@
+# promtool test rules alerts-test.yaml — synthetic series, expected alerts.
+rule_files: [alerts.yaml]
+evaluation_interval: 1m
+tests:
+  - name: api down fires after 2 minutes, not before
+    interval: 1m
+    input_series:
+      - { series: 'up{job="a2a-api"}', values: "1 0 0 0 0" }
+    alert_rule_test:
+      - { eval_time: 2m, alertname: A2AApiDown, exp_alerts: [] }
+      - eval_time: 4m
+        alertname: A2AApiDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: a2a-api }
+            exp_annotations:
+              summary: API not scrapeable for 2 minutes
+              runbook: docs/deployment/monitoring.md#a2aapidown
+
+  - name: database unreachable
+    interval: 1m
+    input_series:
+      - { series: a2a_database_up, values: "1 0 0 0 0" }
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: A2ADatabaseUnreachable
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: API cannot query PostgreSQL (readiness is failing)
+              runbook: docs/deployment/monitoring.md#a2adatabaseunreachable
+
+  - name: repeated workflow failures, and a quiet period does not alert
+    interval: 5m
+    input_series:
+      - { series: 'a2a_workflows_total{outcome="failed",error_code="agent_unreachable"}', values: "0 1 2 3 4 5 6" }
+      - { series: 'a2a_workflows_total{outcome="failed",error_code="llm_timeout"}', values: "0 0 0 0 0 0 0" }
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: A2AWorkflowsFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, outcome: failed, error_code: agent_unreachable }
+            exp_annotations:
+              summary: "6 workflows failed in 30 minutes (error_code agent_unreachable)"
+              runbook: docs/deployment/monitoring.md#a2aworkflowsfailing
+
+  - name: agent error rate needs both a high ratio and enough calls
+    interval: 1m
+    input_series:
+      - { series: 'a2a_agent_calls_total{agent="worker",outcome="completed",error_code=""}', values: "0+1x20" }
+      - { series: 'a2a_agent_calls_total{agent="worker",outcome="failed",error_code="agent_unreachable"}', values: "0+1x20" }
+      - { series: 'a2a_agent_calls_total{agent="reviewer",outcome="completed",error_code=""}', values: "0+10x20" }
+      - { series: 'a2a_agent_calls_total{agent="reviewer",outcome="failed",error_code="agent_failed"}', values: "0+0x20" }
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: A2AAgentErrorRateHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, agent: worker }
+            exp_annotations:
+              summary: "More than 25% of A2A calls to worker failed in 15 minutes"
+
+  - name: provider failures are visible per error code
+    interval: 5m
+    input_series:
+      - { series: 'a2a_agent_calls_total{agent="reviewer",outcome="failed",error_code="llm_rate_limited"}', values: "0 1 2 3 4 5 6" }
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: A2AProviderFailures
+        exp_alerts:
+          - exp_labels: { severity: warning, agent: reviewer, error_code: llm_rate_limited }
+            exp_annotations:
+              summary: "LLM provider failures for reviewer: llm_rate_limited"
+
+  - name: rejected approval writes
+    interval: 1m
+    input_series:
+      - { series: 'a2a_http_requests_total{route="/api/eng/workflows/{id}/decisions",method="POST",status_class="4xx"}', values: "0+1x15" }
+      - { series: 'a2a_http_requests_total{route="/api/workflows",method="POST",status_class="4xx"}', values: "0+5x15" }
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: A2AUnauthorizedApprovalAttempts
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "15 rejected engineering/approval write requests in 15 minutes"
+              runbook: docs/deployment/monitoring.md#a2aunauthorizedapprovalattempts
+
+  - name: missing backup evidence
+    interval: 10m
+    input_series:
+      - { series: a2a_backup_last_success_timestamp_seconds, values: "0x60" }
+    alert_rule_test:
+      - eval_time: 9h
+        alertname: A2ABackupMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: No successful backup recorded in the last 8 hours
+              runbook: docs/deployment/backup-restore.md
