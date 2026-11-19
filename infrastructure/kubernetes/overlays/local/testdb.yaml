@@ -1,0 +1,132 @@
+# TEST ONLY (local K3s test bed): a throwaway Postgres with TLS from a
+# generated CA, so the API's verify-full path is exercised as in production.
+# Real environments use external Supabase; never add this to dev/staging/prod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: testdb
+  labels:
+    app.kubernetes.io/name: testdb
+spec:
+  selector:
+    app.kubernetes.io/name: testdb
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testdb
+  labels:
+    app.kubernetes.io/name: testdb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: testdb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: testdb
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          args:
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/tls/tls.crt
+            - -c
+            - ssl_key_file=/tls/tls.key
+          env:
+            - { name: POSTGRES_USER, value: a2a }
+            - { name: POSTGRES_DB, value: a2a }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: testdb-auth, key: password }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, a2a, -d, a2a, -h, 127.0.0.1]
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+            - { name: tls, mountPath: /tls, readOnly: true }
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        # Owned root:70, mode 0640: the only non-0600 layout Postgres accepts for a key.
+        - name: tls
+          secret:
+            secretName: testdb-tls
+            defaultMode: 0640
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: testdb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: testdb
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [api, api-migrate]
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# The in-cluster test DB sits in a private range the base database-egress
+# policy excludes; allow exactly this pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-egress-testdb
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [api, api-migrate]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: testdb
+      ports:
+        - { protocol: TCP, port: 5432 }

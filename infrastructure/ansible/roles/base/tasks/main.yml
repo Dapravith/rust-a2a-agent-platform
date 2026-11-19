@@ -1,0 +1,34 @@
+- name: Package index is current and installed packages are upgraded
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    upgrade: safe
+
+- name: Baseline packages
+  ansible.builtin.apt:
+    name: [unattended-upgrades, chrony, nftables, curl, ca-certificates]
+    state: present
+
+- name: Automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+
+- name: Time synchronization
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true
+
+- name: Persistent, size-capped host journal
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/50-a2a.conf
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse={{ journald_max_use }}
+    mode: "0644"
+  notify: Restart journald

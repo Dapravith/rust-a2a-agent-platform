@@ -149,10 +149,14 @@ impl Engine {
         // Instrumented, not `span.enter()`: the guard must not be held across `.await`.
         async move {
         match outcome {
-            Ok(verdict) => tracing::info!(outcome = "completed", verdict, "workflow finished"),
+            Ok(verdict) => {
+                crate::metrics::workflow_finished(None);
+                tracing::info!(outcome = "completed", verdict, "workflow finished")
+            }
             Err(f) => {
                 let msg = f.error.to_string();
                 let code = f.error.code();
+                crate::metrics::workflow_finished(Some(code.as_str()));
                 tracing::warn!(outcome = "failed", error_code = %code, stage = f.stage,
                     error = %msg, detail = ?f.error, "workflow failed");
                 let record = || {
@@ -275,17 +279,23 @@ impl Engine {
     {
         let part = data_part(request).map_err(|e| StepError::Internal(e.to_string()))?;
         tracing::info!(agent, "calling agent over A2A");
+        let started = std::time::Instant::now();
         let outcome = self
             .gateway
             .call::<Out>(endpoint, part, artifact_name)
-            .await
-            .map_err(|e| {
-                tracing::warn!(agent, detail = %e, "A2A call failed");
-                StepError::Agent {
-                    code: e.code(),
-                    message: format!("{agent}: {}", e.safe_message()),
-                }
-            })?;
+            .await;
+        crate::metrics::agent_call(
+            agent,
+            started.elapsed(),
+            outcome.as_ref().err().map(|e| e.code().as_str()),
+        );
+        let outcome = outcome.map_err(|e| {
+            tracing::warn!(agent, detail = %e, "A2A call failed");
+            StepError::Agent {
+                code: e.code(),
+                message: format!("{agent}: {}", e.safe_message()),
+            }
+        })?;
         let content =
             serde_json::to_value(&outcome.value).map_err(|e| StepError::Internal(e.to_string()))?;
         db::complete_run(

@@ -1,0 +1,49 @@
+- name: Administrative user
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups: [sudo]
+    append: true
+    shell: /bin/bash
+
+- name: Administrative user's keys (exclusive)
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ admin_ssh_public_keys | join('\n') }}"
+    exclusive: true
+
+- name: Passwordless sudo for the administrative user
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-{{ admin_user }}
+    content: "{{ admin_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+# Lock-down happens only after the owner has confirmed key login works.
+- name: SSH lock-down
+  when: ssh_lockdown_confirmed | bool
+  block:
+    - name: Hardened sshd drop-in
+      ansible.builtin.template:
+        src: sshd-hardening.conf.j2
+        dest: /etc/ssh/sshd_config.d/50-a2a-hardening.conf
+        mode: "0644"
+
+    - name: Full sshd configuration is valid
+      ansible.builtin.command: sshd -t
+      changed_when: false
+      notify: Reload sshd
+  rescue:
+    - name: Remove the drop-in that failed validation
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/50-a2a-hardening.conf
+        state: absent
+    - name: Stop here
+      ansible.builtin.fail:
+        msg: sshd rejected the hardened configuration; it was removed and sshd was not reloaded.
+
+- name: Lock-down skipped
+  ansible.builtin.debug:
+    msg: >-
+      ssh_lockdown_confirmed is false: password/root login unchanged. Verify
+      `ssh {{ admin_user }}@{{ ansible_host }}` with your key, then rerun with it set to true.
+  when: not (ssh_lockdown_confirmed | bool)

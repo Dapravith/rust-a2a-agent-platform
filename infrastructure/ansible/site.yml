@@ -1,0 +1,21 @@
+# Host hardening + K3s for the single-node private pilot.
+#   ansible-playbook site.yml --check --diff     # review first
+#   ansible-playbook site.yml                    # requires owner authorization
+- name: Pilot node
+  hosts: all
+  become: true
+  pre_tasks:
+    - name: Required variables are set
+      ansible.builtin.assert:
+        that:
+          - admin_ssh_public_keys | length > 0
+          - admin_cidrs | length > 0
+          - node_ip is defined
+          - ansible_facts['os_family'] == 'Debian'
+          - ansible_facts['architecture'] == 'x86_64'
+        fail_msg: Fill in group_vars/all.yml and inventory.yml (Debian/Ubuntu amd64 only).
+  roles:
+    - base
+    - ssh
+    - firewall
+    - k3s

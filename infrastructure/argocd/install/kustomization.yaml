@@ -1,0 +1,45 @@
+# One-time bootstrap of Argo CD v3.6.2 + Sealed Secrets v0.41.2:
+#   kubectl apply --server-side -k infrastructure/argocd/install
+# After that, every change to the platform goes through Git (applications/).
+# Access: no Ingress. `kubectl -n argocd port-forward svc/argocd-server 8443:443`
+# through the VPN-only Kubernetes API.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  # Upstream manifest at the immutable v3.6.2 commit.
+  - https://raw.githubusercontent.com/argoproj/argo-cd/8e8268ef2f3df99ca95663f5080fa6056f156805/manifests/install.yaml
+  # Vendored release asset (sha256 5973b18ef77ae91e464bac62542a12c48844a08da69d80e45a8fc7f0d67fe205).
+  - sealed-secrets/controller.yaml
+images:
+  - name: quay.io/argoproj/argocd
+    digest: sha256:bbcc3b6e79c5963439bdc5170f6e20a52365b41878133fac5ce8d6810d2641dc
+  - name: public.ecr.aws/docker/library/redis
+    digest: sha256:ef216d85ec44f4fdf7c0e6df2d1757a4734ed32fbb278cabd3181b5a27353b79
+  - name: ghcr.io/dexidp/dex
+    digest: sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
+  - name: docker.io/bitnami/sealed-secrets-controller
+    digest: sha256:e63ec6ec2b12a471bf781081bd370a93ca7b7b3999e5b9243341379aeb801d0b
+patches:
+  # Not used: no SSO (Dex) and no ApplicationSets. Fewer pods, less attack surface.
+  - target: { kind: Deployment, name: argocd-dex-server }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 0 }
+  - target: { kind: Deployment, name: argocd-applicationset-controller }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 0 }
+  # Per-key adds: upstream argocd-cm carries defaults (resource exclusions) that must stay.
+  - target: { kind: ConfigMap, name: argocd-cm }
+    patch: |-
+      - { op: add, path: /data/users.anonymous.enabled, value: "false" }
+      - { op: add, path: /data/exec.enabled, value: "false" }
+      - { op: add, path: /data/admin.enabled, value: "true" }
+      - { op: add, path: /data/timeout.reconciliation, value: 180s }
+  - target: { kind: ConfigMap, name: argocd-rbac-cm }
+    patch: |-
+      - op: add
+        path: /data
+        value:
+          policy.default: ""
+          policy.csv: |
+            g, admin, role:admin

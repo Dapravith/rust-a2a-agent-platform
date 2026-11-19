@@ -25,9 +25,9 @@ FROM ${RUNTIME_IMAGE} AS portal
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY package.json ./
+COPY package.json server.mjs ./
 USER 65532:65532
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=4321
 EXPOSE 4321
-# The distroless entrypoint is the node binary.
-CMD ["dist/server/entry.mjs"]
+# The distroless entrypoint is the node binary; server.mjs adds SIGTERM draining.
+CMD ["server.mjs"]

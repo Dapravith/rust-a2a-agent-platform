@@ -209,3 +209,61 @@ GitOps lives in this repo for the pilot (simplest; protected paths via CODEOWNER
 | D5 | Secrets mechanism | Sealed Secrets (no external secret manager required; Argo-compatible). Lost controller key = every SealedSecret must be re-created from source values |
 | D6 | GitOps location | Same repo with CODEOWNERS on protected paths for the pilot |
 | D7 | Supabase plan / projects for dev (backup and PITR capability depends on plan) | Separate dev project; confirm backup features in the dashboard |
+
+---
+
+## 12. Phase 7B results (2026-11-19)
+
+Status: **7B complete locally; GitHub-side runs and publishing UNVERIFIED** (nothing pushed; publishing needs owner opt-in).
+
+### Changes
+
+| Item | Files |
+|---|---|
+| A1 SIGTERM drain (all Rust binaries) | `crates/agent-runtime/src/server.rs` (`shutdown_signal`), `apps/api/src/main.rs`, `apps/role-agents/src/main.rs`, `apps/mcp-server/src/main.rs`; test `apps/worker-agent/tests/shutdown.rs` |
+| A1b SIGTERM drain (portal; found by the smoke test: Node as PID 1 ignored SIGTERM, 21 s to SIGKILL) | `frontend/server.mjs` |
+| A2 `LOG_FORMAT=json` for agents | `agent-runtime::init_tracing`, `.env.example` |
+| A4 portal liveness | `frontend/src/pages/healthz.ts` |
+| B1 images | `backend/Dockerfile`, `frontend/Dockerfile`, `.dockerignore` ×2, `scripts/container-smoke.sh` |
+| B2 CI | `.github/workflows/ci.yml` (SHA-pinned; + `supply-chain`, `e2e`, `images`), `backend/deny.toml`, `.gitleaksignore`, `scripts/ci-install-scanners.sh` |
+| B3 release | `.github/workflows/release.yml` (inert until `PUBLISH_IMAGES=true`) |
+| Test fix | `frontend/tests/e2e/a11y-responsive.spec.ts`: expectation predated the Phase 6 "Engineering" nav link (suite had never run) |
+| Docs | `docs/deployment/local-containers.md`, `docs/deployment/ci-cd.md` |
+
+No REST/A2A/MCP contract, migration or approval change.
+
+### Evidence (MEASURED, this Mac, arm64 unless stated)
+
+| Check | Result |
+|---|---|
+| Baseline (HEAD worktree): fmt, clippy, `cargo test` | PASS, 197 passed / 0 failed / 2 ignored (= 6F) |
+| SIGTERM test on **unfixed** code | FAIL as expected (`signal: 15`) |
+| After: fmt, clippy `-D warnings`, `cargo test --workspace` | PASS, **198 passed / 0 failed / 2 ignored** |
+| Frontend unit / `astro check` / `check-secrets.sh` | 35/35 · 0 errors, warnings, hints · OK |
+| **Playwright E2E + axe** (first run since Phase 4) | **31/31 passed** |
+| `cargo deny --locked check` | PASS (1 documented ignore: RUSTSEC-2026-0543, chrono unmaintained) |
+| gitleaks (git history) | PASS (S4 false positive in `.gitleaksignore`) |
+| `trivy config` (Dockerfiles, workflows) | 0 HIGH/CRITICAL |
+| actionlint | PASS |
+| Image builds | api 82 MB, worker 71 MB, reviewer 71 MB, portal 471 MB (uncompressed); all uid 65532, no shell |
+| `trivy image` (vuln + secret) | 0 HIGH/CRITICAL, 0 secrets; api: 63 LOW/MEDIUM/UNKNOWN Debian findings. Rust crates inside binaries not visible to Trivy (covered by cargo-deny) |
+| `scripts/container-smoke.sh` (read-only, cap-drop ALL, no-new-privileges, non-root) | **PASS**: probes, both Agent Cards, mock Worker → Reviewer workflow, portal render + CSP/XFO, every container exits 0 on SIGTERM in ≤ 1 s |
+| Memory after one workflow (mock) | portal 47 MiB, api 3.6 MiB, worker 2.6 MiB, reviewer 1.7 MiB; CPU idle |
+| linux/amd64 | portal: built, runs hardened, `process.arch` = `x64`. Rust images: **UNVERIFIED** locally (emulated release build would take hours; CI `images` job builds amd64 natively) |
+
+### Gate 7B
+
+| Item | Status |
+|---|---|
+| Required images build | PASS (arm64 ×4, amd64 portal); amd64 Rust UNVERIFIED until CI runs |
+| Tests pass | PASS |
+| Security scans run | PASS locally; UNVERIFIED in GitHub Actions |
+| Images published by digest | NOT RUN: needs owner authorization (`PUBLISH_IMAGES=true`) |
+| CI permissions restricted | PASS by configuration (`contents: read` default; write scopes only in `release.yml` `publish`); UNVERIFIED on GitHub |
+
+### Follow-ups
+
+- Lower planned Kubernetes requests (§4) toward the measured values with headroom for real-LLM payloads.
+- Portal image size: production `node_modules` dominates; consider pruning in 7C.
+- `cargo auditable` builds so image scanners see Rust dependencies.
+- 6F TD6 (E2E not in CI) is closed by the `e2e` job once it runs on GitHub.

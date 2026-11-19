@@ -1,0 +1,33 @@
+# a2a-staging: UNVERIFIED template: never deployed.
+# Images are referenced by digest only; promotion copies digests between
+# overlays (infrastructure/scripts/promote.sh), never rebuilds. All-zero
+# digests mean "not released yet".
+# Secrets (SealedSecrets, see docs/deployment/secrets.md): api-database,
+# api-database-migration, llm-provider. Add the sealed files to resources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: a2a-staging
+resources:
+  - namespace.yaml
+  - ../../base
+  - db-ca.yaml
+components:
+  - ../../components/real-inference
+images:
+  - name: ghcr.io/dapravith/a2a-api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/dapravith/a2a-worker-agent
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/dapravith/a2a-reviewer-agent
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/dapravith/a2a-portal
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+patches:
+  - target: { kind: Ingress, name: portal }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: portal.staging.a2a.internal
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: portal.staging.a2a.internal

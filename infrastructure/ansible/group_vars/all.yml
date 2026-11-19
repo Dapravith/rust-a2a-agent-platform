@@ -1,0 +1,24 @@
+# Administrative access
+admin_user: a2a-admin
+admin_ssh_public_keys: []          # REQUIRED: ["ssh-ed25519 AAAA... you@laptop"]
+# Source ranges allowed to reach SSH (your VPN range and/or a fixed admin IP).
+admin_cidrs: []                    # REQUIRED, e.g. ["100.64.0.0/10"]
+# Set to true only after confirming key login as admin_user works in a second
+# terminal. Until then password and root login are left as they are.
+ssh_lockdown_confirmed: false
+
+# Private network (owner decision D2: WireGuard or Tailscale). The firewall
+# exposes 443 (ingress) and 6443 (Kubernetes API) only on this interface.
+vpn_interface: tailscale0
+vpn_cidr: 100.64.0.0/10
+vpn_udp_port: 0                    # WireGuard listen port; 0 = none opened
+
+# K3s (stable channel 2026-11-19). Checksum from the release's sha256sum-amd64.txt.
+k3s_version: v1.37.2+k3s1
+k3s_sha256_amd64: 265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda
+k3s_cluster_cidr: 10.42.0.0/16
+k3s_service_cidr: 10.43.0.0/16
+k3s_etcd_snapshot_cron: "0 */6 * * *"
+k3s_etcd_snapshot_retention: 28
+
+journald_max_use: 1G

@@ -1,0 +1,33 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible (infrastructure/ansible/roles/firewall). Input is
+# default-deny; forwarding is left to K3s (kube-router/flannel manage it).
+flush ruleset
+
+table inet a2a_filter {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    ct state established,related accept
+    ct state invalid drop
+    iifname "lo" accept
+    meta l4proto { icmp, ipv6-icmp } accept
+
+    # SSH from approved administrative ranges only.
+    ip saddr { {{ admin_cidrs | join(', ') }} } tcp dport 22 accept
+{% if vpn_udp_port | int > 0 %}
+    udp dport {{ vpn_udp_port }} accept
+{% endif %}
+
+    # Ingress (443) and Kubernetes API (6443): VPN interface only.
+    iifname "{{ vpn_interface }}" ip saddr {{ vpn_cidr }} tcp dport { 443, 6443 } accept
+
+    # Pods and services reaching the node (kubelet, API server via the
+    # kubernetes Service, metrics). Single node: no flannel/etcd peer ports.
+    ip saddr { {{ k3s_cluster_cidr }}, {{ k3s_service_cidr }} } accept
+  }
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+  }
+  chain output {
+    type filter hook output priority filter; policy accept;
+  }
+}

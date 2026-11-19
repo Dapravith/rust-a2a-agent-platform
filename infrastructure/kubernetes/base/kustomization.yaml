@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: a2a-platform
+    includeSelectors: false
+resources:
+  - api/api.yaml
+  - agents/agents.yaml
+  - portal/portal.yaml
+  - network-policies.yaml
+  - quota.yaml

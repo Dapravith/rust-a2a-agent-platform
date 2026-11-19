@@ -115,3 +115,47 @@ jobs:
         with:
           name: release-manifest
           path: release.json
+
+  gitops-pr:
+    # Opens (never merges) a PR that points overlays/dev at the new digests.
+    # Needs a GitHub App (vars.GITOPS_APP_ID + secrets.GITOPS_APP_PRIVATE_KEY,
+    # contents + pull-requests write on this repo only): PRs opened with
+    # GITHUB_TOKEN would not run CI.
+    needs: record
+    if: vars.GITOPS_APP_ID != ''
+    runs-on: ubuntu-latest
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-manifest
+      - name: Update overlays/dev and open a PR
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          branch="gitops/dev-${SHA:0:12}"
+          infrastructure/scripts/promote.sh --release release.json dev
+          git diff --quiet && { echo "dev already at these digests"; exit 0; }
+          git config user.name "a2a-gitops[bot]"
+          git config user.email "a2a-gitops[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "gitops(dev): images from ${SHA:0:12}"
+          git push origin "$branch"
+          {
+            echo "Images built, scanned and attested by ${{ github.event.workflow_run.html_url }} from commit $SHA."
+            echo
+            echo '```json'
+            cat release.json
+            echo '```'
+          } > pr-body.md
+          gh pr create --base main --head "$branch" \
+            --title "gitops(dev): images from ${SHA:0:12}" --body-file pr-body.md

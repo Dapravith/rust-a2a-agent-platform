@@ -1,0 +1,17 @@
+# Manual sync only (also enforced by the AppProject sync window). Never prune unreviewed.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: a2a-production
+  namespace: argocd
+spec:
+  project: a2a
+  source:
+    repoURL: https://github.com/Dapravith/rust-a2a-agent-platform.git
+    targetRevision: main
+    path: infrastructure/kubernetes/overlays/production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: a2a-production
+  syncPolicy:
+    syncOptions: [PruneLast=true]

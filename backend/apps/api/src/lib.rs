@@ -7,6 +7,7 @@ pub mod db;
 pub mod eng;
 pub mod engine;
 pub mod error_code;
+pub mod metrics;
 pub mod routes;
 
 use axum::Router;
@@ -39,5 +40,7 @@ pub fn app_with(
         ),
         None => router,
     };
+    // Route layer: runs after routing, so the matched route *template* is known.
+    let router = router.route_layer(axum::middleware::from_fn(metrics::track));
     routes::harden(router)
 }

@@ -10,7 +10,7 @@ set -euo pipefail
 tag="${1:-dev}"
 net=a2a-smoke
 pg=a2a-smoke-pg
-api_port=18080 portal_port=14321
+api_port=28080 portal_port=24321
 pw="smoke-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 
 harden=(--read-only --cap-drop ALL --security-opt no-new-privileges:true
@@ -31,7 +31,7 @@ docker network create --internal=false "$net" >/dev/null
 docker run -d --name "$pg" --network "$net" \
   -p "127.0.0.1:$api_port:8080" -e POSTGRES_PASSWORD="$pw" -e POSTGRES_DB=a2a \
   --tmpfs /var/lib/postgresql/data postgres:17-alpine >/dev/null
-for _ in $(seq 1 120); do docker exec "$pg" pg_isready -U postgres -d a2a >/dev/null 2>&1 && break; sleep 1; done
+for _ in $(seq 1 120); do docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres -d a2a >/dev/null 2>&1 && break; sleep 1; done
 db="postgres://postgres:$pw@127.0.0.1:5432/a2a"
 
 for a in worker:9101 reviewer:9102; do
@@ -75,6 +75,15 @@ done
 id=${loc##*/}
 curl -fsS "$portal/workflows/$id" | grep -qi 'review' || fail "portal workflow detail page"
 echo "ok   mock Worker -> Reviewer workflow completed and renders in the portal"
+metrics=$(curl -fsS "$api/metrics")
+echo "$metrics" | grep -q '^a2a_workflows_total{outcome="completed",error_code=""} [1-9]' || fail "workflow counter"
+echo "$metrics" | grep -q "$id" && fail "workflow id leaked into metrics"
+[ -n "${METRICS_OUT:-}" ] && echo "$metrics" > "$METRICS_OUT"
+echo "ok   /metrics counts the workflow, no ids in labels"
+
+echo "resource snapshot (after one workflow, mock inference):"
+docker stats --no-stream --format '  {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}\tpids={{.PIDs}}' \
+  a2a-smoke-portal a2a-smoke-api a2a-smoke-worker a2a-smoke-reviewer
 
 for c in a2a-smoke-portal a2a-smoke-api a2a-smoke-worker a2a-smoke-reviewer; do
   start=$(date +%s); docker stop -t 20 "$c" >/dev/null; secs=$(( $(date +%s) - start ))

@@ -1,0 +1,23 @@
+# Managed by Ansible (infrastructure/ansible/roles/k3s). K3s {{ k3s_version }}.
+write-kubeconfig-mode: "0600"
+node-ip: {{ node_ip }}
+advertise-address: {{ node_ip }}
+# The API server listens on all addresses (K3s internals use 127.0.0.1:6443);
+# the firewall admits 6443 only on the VPN interface.
+tls-san: [{{ node_ip }}]
+cluster-cidr: {{ k3s_cluster_cidr }}
+service-cidr: {{ k3s_service_cidr }}
+# Kubernetes Secrets encrypted at rest in the datastore.
+secrets-encryption: true
+# Embedded etcd for `k3s etcd-snapshot` (scheduled + on-demand backups).
+cluster-init: true
+etcd-snapshot-schedule-cron: "{{ k3s_etcd_snapshot_cron }}"
+etcd-snapshot-retention: {{ k3s_etcd_snapshot_retention }}
+protect-kernel-defaults: true
+kube-apiserver-arg:
+  - admission-control-config-file=/etc/rancher/k3s/psa.yaml
+  - audit-policy-file=/etc/rancher/k3s/audit-policy.yaml
+  - audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log
+  - audit-log-maxage=30
+  - audit-log-maxbackup=10
+  - audit-log-maxsize=100

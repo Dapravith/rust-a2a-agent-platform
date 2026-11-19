@@ -1,0 +1,9 @@
+# Public CA certificate of this environment's Supabase project (not a secret).
+# Until it is replaced, the API's verify-full TLS check fails closed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-ca
+data:
+  ca.crt: |
+    REPLACE WITH THE SUPABASE PROJECT CA CERTIFICATE (PEM)

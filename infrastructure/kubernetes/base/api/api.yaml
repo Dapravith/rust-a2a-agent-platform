@@ -1,0 +1,167 @@
+# Rust API (orchestrator). Exactly one replica: `api serve` holds a Postgres
+# advisory lock and a second instance exits, so updates use Recreate.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: api
+spec:
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+    spec:
+      serviceAccountName: api
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/dapravith/a2a-api
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-database
+                  key: url
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          # Ready only while the database answers (503 otherwise).
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: db-ca, mountPath: /etc/a2a/db-ca, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: db-ca
+          configMap:
+            name: db-ca
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+---
+# Schema migrations as the schema owner (separate secret from the runtime
+# role). Argo CD runs it before every sync; `api serve` refuses to start on
+# an unmigrated or newer schema, so ordering failures are fail-closed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: api-migrate
+  labels:
+    app.kubernetes.io/name: api-migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: api
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/dapravith/a2a-api
+          args: ["migrate"]
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-database-migration
+                  key: url
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: db-ca, mountPath: /etc/a2a/db-ca, readOnly: true }
+      volumes:
+        - name: db-ca
+          configMap:
+            name: db-ca
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  LOG_FORMAT: json
+  RUST_LOG: info
+  WORKER_URL: http://worker-agent:9101
+  REVIEWER_URL: http://reviewer-agent:9102
+  DB_MAX_CONNECTIONS: "5"
+  AGENT_TIMEOUT_SECS: "240"

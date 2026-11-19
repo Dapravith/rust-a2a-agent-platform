@@ -1,0 +1,190 @@
+# Worker and Reviewer A2A agents. Internal only: reachable from the API pod,
+# never from the ingress. Inference settings come from agent-config; overlays
+# with real inference add the `llm-provider` secret (agents only, never api).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+data:
+  LOG_FORMAT: json
+  RUST_LOG: info
+  INFERENCE_MODE: mock
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker-agent
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-agent
+  labels:
+    app.kubernetes.io/name: worker-agent
+spec:
+  selector:
+    app.kubernetes.io/name: worker-agent
+  ports:
+    - name: http
+      port: 9101
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-agent
+  labels:
+    app.kubernetes.io/name: worker-agent
+    a2a.platform/component: agent
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker-agent
+        a2a.platform/component: agent
+    spec:
+      serviceAccountName: worker-agent
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker-agent
+          image: ghcr.io/dapravith/a2a-worker-agent
+          ports:
+            - name: http
+              containerPort: 9101
+          envFrom:
+            - configMapRef:
+                name: agent-config
+          env:
+            # Must equal what the API uses: the Agent Card advertises it.
+            - name: WORKER_PUBLIC_URL
+              value: http://worker-agent:9101
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reviewer-agent
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviewer-agent
+  labels:
+    app.kubernetes.io/name: reviewer-agent
+spec:
+  selector:
+    app.kubernetes.io/name: reviewer-agent
+  ports:
+    - name: http
+      port: 9102
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewer-agent
+  labels:
+    app.kubernetes.io/name: reviewer-agent
+    a2a.platform/component: agent
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reviewer-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reviewer-agent
+        a2a.platform/component: agent
+    spec:
+      serviceAccountName: reviewer-agent
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reviewer-agent
+          image: ghcr.io/dapravith/a2a-reviewer-agent
+          ports:
+            - name: http
+              containerPort: 9102
+          envFrom:
+            - configMapRef:
+                name: agent-config
+          env:
+            - name: REVIEWER_PUBLIC_URL
+              value: http://reviewer-agent:9102
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
