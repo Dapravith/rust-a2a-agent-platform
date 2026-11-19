@@ -48,4 +48,16 @@ Argo CD compares every 180 s. In dev, any `kubectl edit` is reverted. In staging
 
 ## Verification status
 
-`validate.sh` renders and schema-checks every overlay and the Argo CD objects; `promote.sh` was tested on a copy of the repo (order enforcement, zero-digest refusal, idempotency, digest-only diff). Argo CD reconciliation, drift self-heal and manual-sync gating in a running cluster are **UNVERIFIED** (local test bed BLOCKED, `docs/PHASE7.md` §13).
+`validate.sh` renders and schema-checks every overlay and the Argo CD objects. `promote.sh` was tested on a copy of the repo: order enforcement, zero-digest refusal, idempotency, digest-only diff.
+
+`infrastructure/scripts/argocd-local-test.sh` passed **14/14** on the local K3s test bed (2026-11-19). It installs `install/` as written, syncs through the real AppProject policy from a throwaway Git server holding a snapshot of the working tree, and checks:
+- the app reaches Synced/Healthy, SealedSecrets are unsealed, and the migration runs in wave 1;
+- a workflow completes through the deployed stack;
+- a manual `kubectl scale` is reverted;
+- a Git commit is applied and its `git revert` rolls it back;
+- a Role added to Git is refused ("not permitted in project a2a");
+- an app named `a2a-production` with `automated:` is held `OutOfSync` by the deny window.
+
+Not verified: the real GitHub repo as source, which needs these files pushed to `main`, and promotion PRs through branch protection.
+
+Two defects were found and fixed by this test: Argo CD was rendered into `default`, because upstream `install.yaml` has no namespace (`validate.sh` now fails on that); and a `PreSync` migration deadlocks a first sync, because the hook runs before its namespace and secrets exist (now a wave-1 `Sync` hook).

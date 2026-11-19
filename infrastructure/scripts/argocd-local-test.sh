@@ -70,6 +70,8 @@ kubectl create secret tls testdb-tls -n "$ns" --cert="$gen/db.crt" --key="$gen/d
 kubectl create secret tls portal-tls -n "$ns" --cert="$gen/portal.crt" --key="$gen/portal.key" --dry-run=client -o yaml | seal portal-tls
 grep -rq "$pw" "$ov" && bad "plaintext password in sealed files" || ok "sealed files contain no plaintext credential"
 cp "$gen/ca.crt" "$ov/ca.crt"
+# Kustomize may only load files at or below the overlay directory.
+cp "$root/infrastructure/kubernetes/overlays/local/testdb.yaml" "$ov/testdb.yaml"
 sed "s/a2a-local/$ns/" "$root/infrastructure/kubernetes/overlays/local/namespace.yaml" > "$ov/namespace.yaml"
 cat > "$ov/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -78,7 +80,7 @@ namespace: $ns
 resources:
   - namespace.yaml
   - ../../base
-  - ../local/testdb.yaml
+  - testdb.yaml
   - sealed-api-database.yaml
   - sealed-api-database-migration.yaml
   - sealed-testdb-auth.yaml
@@ -149,7 +151,7 @@ if until_true 900 synced_healthy a2a-gitops-test; then ok "a2a-gitops-test Synce
 else bad "not Synced/Healthy: $(app_field a2a-gitops-test '{.status.sync.status}/{.status.health.status} {.status.conditions[*].message}')"; fi
 kubectl -n "$ns" get secret api-database >/dev/null 2>&1 && ok "SealedSecret decrypted into Secret api-database" || bad "secret not unsealed"
 kubectl -n "$ns" get job api-migrate -o jsonpath='{.status.succeeded}' 2>/dev/null | grep -q 1 \
-  && ok "PreSync migration job succeeded" || bad "migration hook"
+  && ok "migration hook (sync wave 1) succeeded" || bad "migration hook"
 
 echo "== workflow through the GitOps-deployed stack"
 p=$(kubectl -n "$ns" get pod -l app.kubernetes.io/name=api -o jsonpath='{.items[0].metadata.name}')
@@ -176,7 +178,7 @@ push "agents: debug logging" || bad "push change"
 kubectl -n argocd annotate application a2a-gitops-test argocd.argoproj.io/refresh=hard --overwrite >/dev/null
 cm_level() { test "$(kubectl -n "$ns" get cm agent-config -o jsonpath='{.data.RUST_LOG}')" = "$1"; }
 until_true 300 cm_level debug && ok "commit applied (agent-config RUST_LOG=debug)" || bad "commit not applied"
-git -C "$snap" -c user.name=t -c user.email=t@example.invalid revert --no-edit HEAD -q \
+git -C "$snap" -c user.name=t -c user.email=t@example.invalid revert --no-edit HEAD \
   && git -C "$snap" push -q "http://a2a:$gpw@127.0.0.1:13000/a2a/platform.git" main
 kubectl -n argocd annotate application a2a-gitops-test argocd.argoproj.io/refresh=hard --overwrite >/dev/null
 until_true 300 cm_level info && ok "git revert rolled back (RUST_LOG=info)" || bad "revert not applied"
@@ -192,8 +194,10 @@ sed -i.bak 's/  - sealed-portal-tls.yaml/  - sealed-portal-tls.yaml\n  - role.ya
 git -C "$snap" add -A && push "try to add a Role" || bad "push role"
 kubectl -n argocd annotate application a2a-gitops-test argocd.argoproj.io/refresh=hard --overwrite >/dev/null
 sleep 45
+msg="$(app_field a2a-gitops-test '{.status.operationState.message} {.status.conditions[*].message}')"
 if kubectl -n "$ns" get role escalate >/dev/null 2>&1; then bad "Role was created"
-else ok "Role not created ($(app_field a2a-gitops-test '{.status.operationState.message}' | cut -c1-110))"; fi
+elif echo "$msg" | grep -qi 'not permitted\|is not allowed\|resource.*Role'; then ok "Role refused by AppProject: $(echo "$msg" | cut -c1-120)"
+else bad "Role absent but no AppProject refusal recorded: $(echo "$msg" | cut -c1-160)"; fi
 
 echo "== production sync window blocks automated sync"
 sleep 60

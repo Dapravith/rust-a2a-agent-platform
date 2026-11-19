@@ -47,4 +47,4 @@ Access: only the owner holds cluster-admin and the key backup. Pods have no serv
 
 ## Verification status
 
-The secret wiring (which Secret reaches which pod) is checked by rendering and by the local overlay. Sealing and decryption by the controller in a running cluster is **UNVERIFIED** (local test bed BLOCKED, `docs/PHASE7.md` §13).
+Verified in the local test bed: five test credentials were sealed with `kubeseal` against the in-cluster controller, committed to the test Git server (no plaintext in the sealed files), and unsealed into Secrets that the pods used; the AppProject never needed `Secret` permission. Not verified: the key backup and restore onto a rebuilt cluster.

@@ -41,6 +41,15 @@ kubeconform -strict -summary -kubernetes-version "$K8S_VERSION" \
 kubeconform -strict -summary -kubernetes-version "$K8S_VERSION" -skip CustomResourceDefinition \
   -schema-location default -schema-location "$crds" "$out/upstream/argocd-install.yaml" \
   | sed 's/^/argocd-install: /' || fail=1
+# Upstream install.yaml has no namespaces; workloads must not land in `default`.
+misplaced=$(python3 -I -c '
+import re, sys
+for d in open(sys.argv[1]).read().split("\n---\n"):
+    if re.search(r"^kind: (Deployment|StatefulSet)$", d, re.M):
+        ns = re.search(r"^  namespace: (\S+)", d, re.M)
+        if not ns or ns.group(1) not in ("argocd", "kube-system"):
+            print(re.search(r"^  name: (\S+)", d, re.M).group(1))' "$out/upstream/argocd-install.yaml")
+[ -z "$misplaced" ] || { echo "argocd-install: FAIL workloads outside argocd/kube-system: $misplaced"; fail=1; }
 if sed -n '/name: a2a-production/,/^---/p' "$out/argocd.yaml" | grep -q 'automated'; then
   echo "argocd: FAIL a2a-production must not auto-sync"; fail=1
 fi

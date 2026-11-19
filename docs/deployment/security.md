@@ -6,11 +6,11 @@
 |---|---|---|
 | Images | distroless, uid 65532, no shell, digest-pinned bases; build provenance attested | `trivy image`: 0 HIGH/CRITICAL; `container-smoke.sh` under read-only, cap-drop ALL |
 | Pods | Pod Security `restricted` enforced, no SA tokens, no service links, read-only rootfs, resource limits, namespace quota | `validate.sh` (kubeconform + trivy config: 0 HIGH/CRITICAL) |
-| Network | default-deny NetworkPolicy, explicit paths, no internet egress except agents → 443 and api → 5432 | rendered and validated; runtime enforcement **UNVERIFIED** (`cluster-tests.sh` written, cluster BLOCKED) |
+| Network | default-deny NetworkPolicy, explicit paths, no internet egress except agents → 443 and api → 5432 | enforced on K3s: `cluster-tests.sh` 27/27 (4 allowed, 10 denied paths) |
 | Host | nftables default-deny, VPN-only 443/6443, key-only SSH, audit log, secrets encryption at rest | Ansible lint; execution **UNVERIFIED** |
 | Supply chain | SHA-pinned actions, checksum-verified tools, `cargo deny`, `npm run audit`, gitleaks, trivy | CI config; GitHub runs **UNVERIFIED** until pushed |
 | CI credentials | PR jobs: `contents: read`, no secrets; publishing only after CI passes on `main` and with `PUBLISH_IMAGES=true` | workflow files, actionlint |
-| GitOps | AppProject allow-list; production manual-only with a deny window; CODEOWNERS | `validate.sh` fails if production auto-syncs |
+| GitOps | AppProject allow-list; production manual-only with a deny window; CODEOWNERS | `validate.sh` fails if production auto-syncs; `argocd-local-test.sh` 14/14 (Role refused, deny window holds) |
 | Approvals | human-only, fail closed without an IdP (writes 503) | Phase 6 tests, unchanged |
 
 ## Open risks (ranked)

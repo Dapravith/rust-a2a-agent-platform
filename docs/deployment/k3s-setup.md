@@ -65,4 +65,6 @@ From then on, changes reach the cluster only through Git (`gitops.md`).
 
 - `ansible-playbook --syntax-check` and `ansible-lint` (production profile) pass.
 - Role execution: **UNVERIFIED**. Needs a disposable amd64 VM; not run against any host.
-- K3s settings in a cluster: the local test bed (`infrastructure/scripts/local-cluster.sh`) uses the same `psa.yaml` and `audit-policy.yaml`, minus host-only settings. Its run on 2026-11-19 was **BLOCKED**: the K3s node started and became Ready, but the shared laptop's CPU contention kept crashing etcd and the controllers. See `docs/PHASE7.md` §13.
+- K3s settings in a cluster: **verified** on 2026-11-19 in the local test bed (`infrastructure/scripts/local-cluster.sh`: real K3s v1.37.2 in Docker, the same `psa.yaml` and `audit-policy.yaml`, minus host-only settings). `cluster-tests.sh` passed 27/27: Pod Security `restricted` rejects privileged and non-hardened pods, the quota rejects pods without resources, secrets encryption is enabled, 4 allowed and 10 denied network paths behave as written, TLS ingress works with no route to the API, and a workflow completes in the cluster.
+- etcd snapshot and restore: **verified** (`etcd-restore-test.sh`, see `backup-restore.md`).
+- On a loaded laptop, etcd loses leader election. `LOCAL_DATASTORE=sqlite local-cluster.sh up` uses K3s's SQLite datastore instead; everything except etcd snapshots then works. The test-bed-only settings (tmpfs etcd, relaxed timeouts, leader election off) are never used on the real node.

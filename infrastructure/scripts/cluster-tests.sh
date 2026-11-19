@@ -12,12 +12,20 @@ ok()  { echo "PASS  $*"; pass=$((pass+1)); }
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
 pod() { kubectl -n "$ns" get pod -l "app.kubernetes.io/name=$1" -o jsonpath='{.items[0].metadata.name}'; }
 
-# Runs a shell command in an ephemeral container in the given app's pod.
+# Runs a shell command in an ephemeral container in the given app's pod and
+# prints its complete output. Not --attach: attaching races the container and
+# loses everything printed before the stream connects.
 from() { # app command...
   local app=$1; shift
-  local p; p=$(pod "$app")
+  local p c; p=$(pod "$app"); c="probe-$RANDOM$RANDOM"
   kubectl -n "$ns" debug "$p" -q --profile=restricted --image="$probe" --target="$app" \
-    --attach --rm=false -c "probe-$RANDOM" -- sh -c "$*" 2>/dev/null
+    -c "$c" -- sh -c "$*" >/dev/null 2>&1 || return 1
+  for _ in $(seq 1 90); do
+    kubectl -n "$ns" get pod "$p" -o jsonpath="{.status.ephemeralContainerStatuses[?(@.name=='$c')].state.terminated.reason}" 2>/dev/null \
+      | grep -q . && break
+    sleep 1
+  done
+  kubectl -n "$ns" logs "$p" -c "$c" 2>/dev/null
 }
 reach()   { from "$1" "nc -z -w 3 $2 $3 && echo OPEN || echo CLOSED"; }
 expect()  { # app host port OPEN|CLOSED description
@@ -61,9 +69,19 @@ expect api portal 4321 CLOSED "api cannot reach portal"
 expect portal 1.1.1.1 443 CLOSED "portal has no internet egress"
 expect api 1.1.1.1 443 CLOSED "api has no HTTPS egress"
 expect worker-agent kubernetes.default.svc 443 CLOSED "agent cannot reach the Kubernetes API"
-if kubectl -n "$ns" run np-outsider --image="$probe" --restart=Never --rm -i -q \
-     --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"np-outsider","image":"'"$probe"'","command":["sh","-c","nc -z -w 3 api 8080 && echo OPEN || echo CLOSED"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' \
-     2>/dev/null | grep -q CLOSED; then ok "unlabelled pod cannot reach api"; else bad "unlabelled pod reached api"; fi
+# A pod with no app label (the quota also demands requests/limits on every pod).
+outsider='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"np-outsider","image":"'"$probe"'","command":["sh","-c","nc -z -w 3 api 8080 && echo OPEN || echo CLOSED"],"resources":{"requests":{"cpu":"10m","memory":"8Mi"},"limits":{"cpu":"50m","memory":"16Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}'
+kubectl -n "$ns" delete pod np-outsider --ignore-not-found >/dev/null 2>&1
+if kubectl -n "$ns" run np-outsider --image="$probe" --restart=Never --overrides="$outsider" >/dev/null 2>&1 \
+   && kubectl -n "$ns" wait --for=jsonpath='{.status.phase}'=Succeeded pod/np-outsider --timeout=120s >/dev/null 2>&1; then
+  got=$(kubectl -n "$ns" logs np-outsider 2>/dev/null | tail -1)
+  [ "$got" = CLOSED ] && ok "unlabelled pod cannot reach api" || bad "unlabelled pod -> api: ${got:-no output}"
+else bad "outsider probe pod did not run"; fi
+kubectl -n "$ns" delete pod np-outsider --ignore-not-found >/dev/null 2>&1
+if kubectl -n "$ns" run quota-probe --image="$probe" --restart=Never --dry-run=server \
+     --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"q","image":"'"$probe"'","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null 2>&1; then
+  bad "pod without resource requests/limits admitted"
+else ok "pod without resource requests/limits rejected (ResourceQuota)"; fi
 
 echo "== ingress"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --resolve portal.local.test:18443:127.0.0.1 https://portal.local.test:18443/healthz)

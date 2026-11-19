@@ -29,4 +29,4 @@ On SIGTERM every process stops accepting connections and drains, within 30 s. A 
 
 ## Verification status
 
-The schema guard, the interrupted-workflow recovery (`restart_recovery_fails_interrupted_workflows`) and SIGTERM draining (`scripts/container-smoke.sh`) are tested. The GitOps revert reconciled by Argo CD is **UNVERIFIED** (no running cluster yet).
+Tested: the schema guard (`db-restore-test.sh`), interrupted-workflow recovery (`restart_recovery_fails_interrupted_workflows`), SIGTERM draining (`scripts/container-smoke.sh`), and a `git revert` reconciled by Argo CD (`argocd-local-test.sh`; the test reverts a config change; an image-digest revert takes the same path). Not tested: a rollback in staging or production.

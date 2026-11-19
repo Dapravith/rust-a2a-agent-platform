@@ -5,7 +5,7 @@ A backup counts only once a restore from it has been tested.
 | What | Where it lives | Backup | Restore tested |
 |---|---|---|---|
 | Application data | Supabase Postgres | Supabase backups (plan-dependent: confirm daily backups / PITR in the dashboard, owner decision D7) **and** a nightly `pg_dump -Fc` kept off-provider | **yes**, logical dump: `infrastructure/scripts/db-restore-test.sh` |
-| Kubernetes state | K3s embedded etcd | `k3s etcd-snapshot`, every 6 h, 28 kept, copied off-node | **UNVERIFIED** (local test bed BLOCKED) |
+| Kubernetes state | K3s embedded etcd | `k3s etcd-snapshot`, every 6 h, 28 kept, copied off-node | **yes**: `infrastructure/scripts/etcd-restore-test.sh` |
 | Sealed Secrets key | `kube-system` Secret | manual export, offline and encrypted (`secrets.md`) | **UNVERIFIED** |
 | Manifests, config history | Git | GitHub (+ any clone) | n/a |
 | Release artifacts | GHCR, by digest, with provenance | registry retention | n/a |
@@ -41,8 +41,10 @@ k3s etcd-snapshot ls
 
 Copy `/var/lib/rancher/k3s/server/db/snapshots/` and `/var/lib/rancher/k3s/server/token` off the node (the token is needed to restore, and the snapshot contains encrypted Secrets). Then write `a2a_backup_last_success_timestamp_seconds` to the monitoring backend; `A2ABackupMissing` alerts on its absence.
 
+What `etcd-restore-test.sh` proved on 2026-11-19 (K3s v1.37.2, embedded etcd, secrets encryption on). A snapshot was saved and the test Secret's value does not appear in plaintext in it. A ConfigMap and a Secret deleted after the snapshot came back after `--cluster-reset-restore-path`, the restored Secret decrypted, and encryption was still enabled. The restore must run under the same node name: run it on the node itself.
+
 Restore (single node): stop K3s, then `k3s server --cluster-reset --cluster-reset-restore-path=<snapshot>` with the original token in place, then start K3s. Because Git is the source of truth, rebuilding the node, re-running Ansible and re-bootstrapping Argo CD (with the Sealed Secrets key restored first) is an equally valid path. The etcd snapshot mostly saves time.
 
 ## Not claimed
 
-Disaster recovery readiness is not claimed. The K3s snapshot restore and the Sealed Secrets key restore have not been executed, and the Supabase-native restore depends on the plan in use.
+Disaster recovery readiness is not claimed. Both restores above ran in disposable local environments, not on the real node. The Sealed Secrets key restore and the off-node snapshot copy have not been executed, and the Supabase-native restore depends on the plan in use.

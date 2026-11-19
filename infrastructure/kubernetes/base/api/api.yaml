@@ -26,6 +26,8 @@ metadata:
   name: api
   labels:
     app.kubernetes.io/name: api
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   replicas: 1
   strategy:
@@ -97,8 +99,11 @@ spec:
           emptyDir: { medium: Memory, sizeLimit: 16Mi }
 ---
 # Schema migrations as the schema owner (separate secret from the runtime
-# role). Argo CD runs it before every sync; `api serve` refuses to start on
-# an unmigrated or newer schema, so ordering failures are fail-closed.
+# role). Argo CD sync waves: wave 0 (namespace, config, sealed secrets,
+# policies) must be healthy first, then this hook (wave 1), then the API
+# Deployment (wave 2). Not PreSync: on a fresh cluster PreSync runs before
+# its namespace and secrets exist and never completes. `api serve` refuses
+# an unmigrated or newer schema, so any ordering failure is fail-closed.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -106,7 +111,8 @@ metadata:
   labels:
     app.kubernetes.io/name: api-migrate
   annotations:
-    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   backoffLimit: 2
